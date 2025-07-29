@@ -9,6 +9,14 @@ import SwiftUI
 
 @main
 struct nesApp: App {
+    init() {
+        #if DEBUG
+        print("=== Running Tests (Debug Mode) ===")
+        runAllTests()
+        print("=== Tests Complete ===\n")
+        #endif
+    }
+    
     var body: some Scene {
         WindowGroup {
             ContentView()
