@@ -309,7 +309,7 @@ func runAllTests() {
     
     for (name, test) in tests {
         print("Running \(name)...")
-        test()  // If assert fails, program will crash
+        test() 
         passed += 1
     }
     
