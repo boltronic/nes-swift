@@ -13,6 +13,7 @@ protocol Bus: AnyObject {
     func read(address: UInt16) -> UInt8
     // Writes a byte to the specified address
     func write(address: UInt16, data: UInt8)
+
 }
 
 class OLC6502 {
