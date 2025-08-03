@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import Foundation
 
 @main
 struct nesApp: App {
@@ -16,12 +17,10 @@ struct nesApp: App {
         print("=== Tests Complete ===\n")
         #endif
     }
-    
-    {{
-        var body: some Scene {
-            WindowGroup {
-                ContentView()
-            }
+
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
         }
     }
 }

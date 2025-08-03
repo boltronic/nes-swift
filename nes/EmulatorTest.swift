@@ -32,7 +32,7 @@ extension EmulatorTest {
             // Print hex values
             for j in 0..<16 {
                 if i + j < length {
-                    let value = bus.ram[Int(start) + i + j]
+                    let value = bus.cpuRam[Int(start) + i + j]
                     print(String(format: "%02X", value), terminator: " ")
                 } else {
                     print("   ", terminator: "")
@@ -43,7 +43,7 @@ extension EmulatorTest {
             print(" |", terminator: "")
             for j in 0..<16 {
                 if i + j < length {
-                    let value = bus.ram[Int(start) + i + j]
+                    let value = bus.cpuRam[Int(start) + i + j]
                     if value >= 32 && value <= 126 {
                         print(String(Character(UnicodeScalar(value))), terminator: "")
                     } else {
@@ -63,7 +63,7 @@ extension EmulatorTest {
         let stackPointer = 0x0100 + Int(bus.cpu.stkp)
         
         for addr in stride(from: stackStart, to: stackPointer, by: -1) {
-            let value = bus.ram[addr]
+            let value = bus.cpuRam[addr]
             let marker = addr == stackPointer + 1 ? "SP→" : "   "
             print("\(marker) $\(String(format: "%04X", addr)): $\(String(format: "%02X", value))")
         }
@@ -76,17 +76,17 @@ class EmulatorTest {
     
     func loadProgram(_ bytes: [UInt8], at address: UInt16 = 0x8000) {
         for (offset, byte) in bytes.enumerated() {
-            bus.ram[Int(address) + offset] = byte
+            bus.cpuRam[Int(address) + offset] = byte
         }
         
-        // Set reset vector to point to our program
-        bus.ram[0xFFFC] = UInt8(address & 0xFF)        // Low byte
-        bus.ram[0xFFFD] = UInt8((address >> 8) & 0xFF) // High byte
+        // Set reset vector to point to our progr
+        bus.cpuRam[0xFFFC] = UInt8(address & 0xFF)        // Low byte
+        bus.cpuRam[0xFFFD] = UInt8((address >> 8) & 0xFF) // High byte
         
         // Debug: verify reset vector
         print("Reset vector set to: $\(String(format: "%04X", address))")
-        print("RAM[$FFFC] = $\(String(format: "%02X", bus.ram[0xFFFC]))")
-        print("RAM[$FFFD] = $\(String(format: "%02X", bus.ram[0xFFFD]))")
+        print("RAM[$FFFC] = $\(String(format: "%02X", bus.cpuRam[0xFFFC]))")
+        print("RAM[$FFFD] = $\(String(format: "%02X", bus.cpuRam[0xFFFD]))")
     }
     
     func printCPUState() {
@@ -144,7 +144,7 @@ func testLDAImmediate() {
     test.printCPUState()
     
     // Check what instruction we're about to execute
-    let opcode = test.bus.ram[Int(test.bus.cpu.pc)]
+    let opcode = test.bus.cpuRam[Int(test.bus.cpu.pc)]
     print("Opcode at PC: $\(String(format: "%02X", opcode)) (should be $A9)")
     
     // Execute LDA #$42
@@ -193,7 +193,7 @@ func testMultiplicationProgram() {
     
     // Run until we hit the first NOP
     var instructionCount = 0
-    while test.bus.ram[Int(test.bus.cpu.pc)] != 0xEA {
+    while test.bus.cpuRam[Int(test.bus.cpu.pc)] != 0xEA {
         repeat {
             test.bus.cpu.clock()
         } while !test.bus.cpu.complete()
@@ -207,11 +207,11 @@ func testMultiplicationProgram() {
     
     print("\nFinal state:")
     test.printCPUState()
-    print("Memory[0] = \(test.bus.ram[0]) (should be 10)")
-    print("Memory[1] = \(test.bus.ram[1]) (should be 3)")
-    print("Memory[2] = \(test.bus.ram[2]) (should be 30)")
+    print("Memory[0] = \(test.bus.cpuRam[0]) (should be 10)")
+    print("Memory[1] = \(test.bus.cpuRam[1]) (should be 3)")
+    print("Memory[2] = \(test.bus.cpuRam[2]) (should be 30)")
     
-    assert(test.bus.ram[2] == 30, "10 × 3 should equal 30")
+    assert(test.bus.cpuRam[2] == 30, "10 × 3 should equal 30")
     print("✓ Multiplication test passed\n")
 }
 
@@ -221,7 +221,7 @@ func runWithTrace(instructions: Int) {
     
     for i in 0..<instructions {
         let pc = test.bus.cpu.pc
-        let opcode = test.bus.ram[Int(pc)]
+        let opcode = test.bus.cpuRam[Int(pc)]
         
         print("\(i): ", terminator: "")
         test.printCPUState()
@@ -238,7 +238,7 @@ func testLDAZeroPage() {
     let test = EmulatorTest()
     
     // Put value 0x33 at zero page address 0x10
-    test.bus.ram[0x10] = 0x33
+    test.bus.cpuRam[0x10] = 0x33
     
     // LDA $10 = 0xA5 0x10
     test.loadProgram([0xA5, 0x10])
@@ -348,14 +348,14 @@ func testMultiplicationProgramVisual() {
     
     // Run program with visualization
     var stepCount = 0
-    while test.bus.ram[Int(test.bus.cpu.pc)] != 0xEA {
+    while test.bus.cpuRam[Int(test.bus.cpu.pc)] != 0xEA {
         stepCount += 1
         print("\n--- Step \(stepCount) ---")
         test.printCPUState()
         
         // Show next instruction
         let pc = test.bus.cpu.pc
-        let opcode = test.bus.ram[Int(pc)]
+        let opcode = test.bus.cpuRam[Int(pc)]
         print("Next instruction: $\(String(format: "%02X", opcode)) at $\(String(format: "%04X", pc))")
         
         test.executeOneInstruction()
@@ -371,7 +371,7 @@ func testMultiplicationProgramVisual() {
     test.printCPUState()
     test.printMemoryDump(from: 0x0000, length: 16)
     
-    print("\nResult: \(test.bus.ram[0]) × \(test.bus.ram[1]) = \(test.bus.ram[2])")
+    print("\nResult: \(test.bus.cpuRam[0]) × \(test.bus.cpuRam[1]) = \(test.bus.cpuRam[2])")
     print("✓ Visual multiplication test complete\n")
 }
 
@@ -394,7 +394,7 @@ func interactiveDebug() {
         test.printCPUState()
         
         let pc = test.bus.cpu.pc
-        let opcode = test.bus.ram[Int(pc)]
+        let opcode = test.bus.cpuRam[Int(pc)]
         print("Next: $\(String(format: "%02X", opcode)) at $\(String(format: "%04X", pc))")
         
         print("\nCommands: (s)tep, (m)emory, (z)ero page, (q)uit")

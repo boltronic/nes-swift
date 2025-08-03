@@ -7,7 +7,7 @@
 
 import Foundation
 
-// MARK: Bus Connectivity
+// MARK: - Bus Connectivity
 protocol Bus: AnyObject {
     // Reads an 8-bit byte from the bus, located at the 16 bit address
     func read(address: UInt16) -> UInt8
@@ -83,7 +83,7 @@ class OLC6502 {
         setupInstructionTable()
     }
     
-    // MARK: External Inputs
+    // MARK: - External Inputs
     // Forces the 6502 into a known state. This is hard-wired inside the CPU. The
     // registers are set to 0x00, the status register is cleared except for unused
     // bit which remains at 1. An absolute address is read from location 0xFFFC
@@ -361,7 +361,7 @@ class OLC6502 {
         return fetched
     }
     
-    // MARK: Addressing Modes
+    // MARK: - Addressing Modes
     // Implied addressing
     private func IMP() -> UInt8 {
         fetched = a
@@ -490,7 +490,7 @@ class OLC6502 {
     }
 
     
-    // MARK: Opcodes
+    // MARK: - Opcodes
     // Add with Carry
     private func ADC() -> UInt8 {
         _ = fetch()
@@ -1039,7 +1039,7 @@ class OLC6502 {
     
     private func setupInstructionTable() {
         lookup = [
-            // MARK: Translation Table
+            // MARK: - Translation Table
             Instruction(name: "BRK", operate: BRK, addressingMode: .IMM, cycles: 7),
             Instruction(name: "ORA", operate: ORA, addressingMode: .IZX, cycles: 6),
             Instruction(name: "???", operate: XXX, addressingMode: .IMP, cycles: 2),

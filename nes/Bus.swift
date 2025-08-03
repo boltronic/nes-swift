@@ -6,11 +6,11 @@
 //
 // SystemBus (owns with strong references)
 //    ├── cpu: OLC6502 (strong)
-//    │     └── bus: SystemBus? (weak) ← Points back to parent
+//    │     └── bus: SystemBus? (weak) <- Points back to parent
 //    ├── ppu: OLC2C02 (strong)
-//    │     ├── bus: SystemBus? (weak) ← Points back to parent
-//    │     └── cart: Cartridge? (weak) ← Doesn't own the cartridge
-//    └── cart: Cartridge? (strong) ← SystemBus owns the cartridge
+//    │     ├── bus: SystemBus? (weak) <- Points back to parent
+//    │     └── cart: Cartridge? (weak) <- Doesn't own the cartridge
+//    └── cart: Cartridge? (strong) <- SystemBus owns the cartridge
 
 import Foundation
 
@@ -51,11 +51,14 @@ class SystemBus: Bus {
     func cpuRead(address: UInt16, readOnly: Bool) -> UInt8 {
         var data: UInt8 = 0x00
         
-        if address >= 0x0000 && address <= 0x1FFF {
+        if let cart = cart {
+            cart.cpuRead(address: address, data: &data)
+        }
+        else if address >= 0x0000 && address <= 0x1FFF {
             return cpuRam[Int(address & 0x07FF)]
         }
         else if (address >= 0x2000 && address <= 0x3FFF) {
-            ppu.cpuRead(address & 0x0007, readOnly)
+            return ppu.cpuRead(address & 0x0007, readOnly)
         }
         return data
     }
@@ -74,9 +77,16 @@ class SystemBus: Bus {
     }
     
     func clock() {
+        ppu.clock()
         
+        if systemClockCounter % 3 == 0 {
+            cpu.clock();
+        }
         
+        if (ppu.nmi) {
+            ppu.nmi = false
+            cpu.nmi()
+        }
+        systemClockCounter += 1
     }
-    
-    
 }
