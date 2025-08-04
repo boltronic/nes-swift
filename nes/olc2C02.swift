@@ -9,6 +9,12 @@
 import Foundation
 import SpriteKit
 
+private extension Bool {
+    mutating func toggle() {
+        self = !self
+    }
+}
+
 class OLC2C02 {
     weak var bus: SystemBus?
     weak var cart: Cartridge?
@@ -112,13 +118,13 @@ class OLC2C02 {
     var frameComplete = false
     
     // MARK: - PPU Timing
-    private var cycle: UInt16       = 0
-    private var scanline: UInt16    = 0
+    var cycle: UInt16       = 0
+    var scanline: UInt16    = 0
     
     // MARK: - PPU Registers (CPU accessible)
-    private var control: PPUControl = []
-    private var mask: PPUMask       = []
-    private var status: PPUStatus   = []
+    var control: PPUControl = []
+    var mask: PPUMask       = []
+    var status: PPUStatus   = []
     
     // MARK: - Internal Registers
     private var vramAddr: UInt16    = 0x0000
@@ -145,6 +151,164 @@ class OLC2C02 {
     private var bg_shifter_attribute_lo: UInt16 = 0x0000
     private var bg_shifter_attribute_hi: UInt16 = 0x0000
     
+    // MARK: - Background Rendering Helpers
+    private func updateShifters() {
+        if mask.contains(.showBackground) {
+            // Shift the pattern shifters left by 1
+            bg_shifter_pattern_lo <<= 1
+            bg_shifter_pattern_hi <<= 1
+            
+            // Shift the attribute shifters left by 1
+            bg_shifter_attribute_lo <<= 1
+            bg_shifter_attribute_hi <<= 1
+        }
+    }
+
+    private func loadBackgroundShifters() {
+        // Load the pattern shifters with the fetched tile row
+        bg_shifter_pattern_lo = (bg_shifter_pattern_lo & 0xFF00) | UInt16(bg_next_tile_lsb)
+        bg_shifter_pattern_hi = (bg_shifter_pattern_hi & 0xFF00) | UInt16(bg_next_tile_msb)
+        
+        // Load the attribute shifters
+        let attrib = (bg_next_tile_attrib & 0x03)  // 2-bit palette selection
+        bg_shifter_attribute_lo = (bg_shifter_attribute_lo & 0xFF00) | (attrib & 0x01 != 0 ? 0xFF : 0x00)
+        bg_shifter_attribute_hi = (bg_shifter_attribute_hi & 0xFF00) | (attrib & 0x02 != 0 ? 0xFF : 0x00)
+    }
+
+    private func fetchNametableByte() -> UInt8 {
+        // Fetch tile ID from nametable
+        let addr = 0x2000 | (vramAddrReg.reg & 0x0FFF)
+        return ppuRead(addr)
+    }
+
+    private func fetchAttributeByte() -> UInt8 {
+        // Fetch attribute byte (palette selection for 2x2 tile area)
+        // TODO: - Should uint16 conversion happen before shift?
+        let addr = 0x23C0
+            | (UInt16(vramAddrReg.nametableY ? 1 : 0) << 11)
+            | (UInt16(vramAddrReg.nametableX ? 1 : 0) << 10)
+            | (UInt16(vramAddrReg.coarseY >> 2) << 3)
+            | (UInt16(vramAddrReg.coarseX >> 2))
+        
+        let attrib = ppuRead(addr)
+        
+        // Determine which 2-bit section of the attribute byte to use
+        if vramAddrReg.coarseY & 0x02 != 0 {
+            // Bottom half of the 4x4 tile area
+            if vramAddrReg.coarseX & 0x02 != 0 {
+                // Bottom-right
+                return (attrib >> 6) & 0x03
+            } else {
+                // Bottom-left
+                return (attrib >> 4) & 0x03
+            }
+        } else {
+            // Top half of the 4x4 tile area
+            if vramAddrReg.coarseX & 0x02 != 0 {
+                // Top-right
+                return (attrib >> 2) & 0x03
+            } else {
+                // Top-left
+                return attrib & 0x03
+            }
+        }
+    }
+
+    private func fetchPatternTableLow() -> UInt8 {
+        // Fetch the low byte of the tile pattern
+        let addr = (control.contains(.backgroundPatternTable) ? 0x1000 : 0x0000)
+            + (UInt16(bg_next_tile_id) << 4)
+            + UInt16(vramAddrReg.fineY)
+        
+        return ppuRead(addr)
+    }
+
+    private func fetchPatternTableHigh() -> UInt8 {
+        // Fetch the high byte of the tile pattern (8 bytes after low)
+        let addr = (control.contains(.backgroundPatternTable) ? 0x1000 : 0x0000)
+            + (UInt16(bg_next_tile_id) << 4)
+            + UInt16(vramAddrReg.fineY)
+            + 8
+        
+        return ppuRead(addr)
+    }
+
+    private func incrementScrollX() {
+        if mask.contains(.showBackground) || mask.contains(.showSprites) {
+            if vramAddrReg.coarseX == 31 {
+                vramAddrReg.coarseX = 0
+                vramAddrReg.nametableX.toggle()
+            } else {
+                vramAddrReg.coarseX += 1
+            }
+        }
+    }
+
+    private func incrementScrollY() {
+        if mask.contains(.showBackground) || mask.contains(.showSprites) {
+            if vramAddrReg.fineY < 7 {
+                vramAddrReg.fineY += 1
+            } else {
+                vramAddrReg.fineY = 0
+                
+                if vramAddrReg.coarseY == 29 {
+                    vramAddrReg.coarseY = 0
+                    vramAddrReg.nametableY.toggle()
+                } else if vramAddrReg.coarseY == 31 {
+                    vramAddrReg.coarseY = 0
+                } else {
+                    vramAddrReg.coarseY += 1
+                }
+            }
+        }
+    }
+
+    private func transferAddressX() {
+        if mask.contains(.showBackground) || mask.contains(.showSprites) {
+            vramAddrReg.nametableX = tempAddrReg.nametableX
+            vramAddrReg.coarseX = tempAddrReg.coarseX
+        }
+    }
+
+    private func transferAddressY() {
+        if mask.contains(.showBackground) || mask.contains(.showSprites) {
+            vramAddrReg.fineY = tempAddrReg.fineY
+            vramAddrReg.nametableY = tempAddrReg.nametableY
+            vramAddrReg.coarseY = tempAddrReg.coarseY
+        }
+    }
+
+    private func renderPixel() {
+        let x = Int(cycle - 1)
+        let y = Int(scanline)
+        
+        // Get the pixel from the shifters
+        let bit_mux: UInt16 = 0x8000 >> fineX
+        
+        let p0_pixel: UInt8 = (bg_shifter_pattern_lo & bit_mux) > 0 ? 1 : 0
+        let p1_pixel: UInt8 = (bg_shifter_pattern_hi & bit_mux) > 0 ? 1 : 0
+        let bg_pixel: UInt8 = (p1_pixel << 1) | p0_pixel
+        
+        let bg_pal0: UInt8 = (bg_shifter_attribute_lo & bit_mux) > 0 ? 1 : 0
+        let bg_pal1: UInt8 = (bg_shifter_attribute_hi & bit_mux) > 0 ? 1 : 0
+        let bg_palette: UInt8 = (bg_pal1 << 1) | bg_pal0
+        
+        // Get the palette index (0-63)
+        var paletteIndex: UInt8 = 0x00
+        if bg_pixel == 0 {
+            // Use the universal background color
+            paletteIndex = ppuRead(0x3F00)
+        } else {
+            // Use the selected palette and pixel value
+            paletteIndex = ppuRead(0x3F00 + (UInt16(bg_palette) << 2) + UInt16(bg_pixel))
+        }
+        
+        // Store palette index in framebuffer
+        if x < 256 && y < 240 {
+            framebuffer[y * 256 + x] = paletteIndex
+        }
+    }
+    
     // MARK: - Mirroring Helpers
     private func getMirroredNametableIndex(addr: UInt16) -> (table: Int, offset: Int) {
         let addr = addr & 0x0FFF
@@ -154,28 +318,23 @@ class OLC2C02 {
             // Default to vertical if no cart
             return ((addr & 0x0400) != 0 ? 1 : 0, offset)
         }
-        
         let table: Int
         switch mirrorMode {
         case .vertical:
             // Vertical: A B
             //          A B
             table = (addr & 0x0400) != 0 ? 1 : 0
-            
         case .horizontal:
             // Horizontal: A A
             //            B B
             table = (addr & 0x0800) != 0 ? 1 : 0
-            
         case .oneScreenLo:
             // All nametables map to first table
             table = 0
-            
         case .oneScreenHi:
             // All nametables map to second table
             table = 1
         }
-        
         return (table, offset)
     }
     
@@ -188,38 +347,96 @@ class OLC2C02 {
         self.cart = cartridge
     }
     
+    //MARK: - Core Operations
     func clock() {
-        // Render pixel at current cycle/scanline
-        if scanline >= 0 && scanline < 240 && cycle >= 1 && cycle <= 256 {
-            // incoming
+        // Background rendering happens on visible scanlines
+        if scanline < 240 {  // Visible scanlines 0-239
+            // Visible portion of the frame
+            if cycle >= 1 && cycle <= 256 {
+                // Shift the shift registers
+                updateShifters()
+                // Every 8 cycles we perform a set of fetches
+                switch (cycle - 1) % 8 {
+                case 0:
+                    // Load the shifters with the previously fetched data
+                    loadBackgroundShifters()
+                    // Fetch nametable byte (tile ID)
+                    bg_next_tile_id = fetchNametableByte()
+                case 2:
+                    // Fetch attribute byte
+                    bg_next_tile_attrib = fetchAttributeByte()
+                case 4:
+                    // Fetch pattern table tile low byte
+                    bg_next_tile_lsb = fetchPatternTableLow()
+                case 6:
+                    // Fetch pattern table tile high byte
+                    bg_next_tile_msb = fetchPatternTableHigh()
+                case 7:
+                    // Increment scroll counters
+                    incrementScrollX()
+                default:
+                    break
+                }
+            }
+            
+            // Prepare for next scanline
+            if cycle == 256 {
+                incrementScrollY()
+            }
+            if cycle == 257 {
+                // Reset X position
+                transferAddressX()
+            }
+            // Unused fetches at end of scanline (for MMC3 compatibility)
+            if cycle == 337 || cycle == 339 {
+                bg_next_tile_id = fetchNametableByte()
+            }
+            // Actually render the pixel
+            if cycle >= 1 && cycle <= 256 {
+                renderPixel()
+            }
         }
         
+        // Pre-render scanline
+        if scanline == 261 {
+            if cycle == 1 {
+                // Clear vblank flag at start of pre-render line
+                status.remove(.verticalBlank)
+            }
+            if cycle >= 280 && cycle <= 304 {
+                // Reset Y position
+                transferAddressY()
+            }
+        }
+        
+        // Vblank scanlines (241-260)
+        if scanline == 241 && cycle == 1 {
+            if cycle == 1 {
+                status.insert(.verticalBlank)
+                
+                if control.contains(.enableNMI) {
+                    nmi = true
+                }
+            }
+        }
+        
+        // Advance cycle and scanline
         cycle += 1
         if cycle > 340 {
             cycle = 0
             scanline += 1
             
             if scanline > 261 {
-                scanline = 0
+                scanline = 0  // Wrap back to scanline 0
                 frameComplete = true
             }
-            
-            if scanline == 241 && cycle == 1 {
-                // Start of vblank
-                status.insert(.verticalBlank) // Set vblank flag
-                if control.contains(.enableNMI) {
-                    nmi = true // Trigger NMI if enabled
-                }
-            }
         }
-        
     }
     
     func reset() {
         
     }
     
-    //MARK: - Read/Write
     func cpuWrite(_ addr: UInt16, _ data: UInt8) {
         switch addr {
         case 0x0000: // Control
@@ -277,11 +494,9 @@ class OLC2C02 {
         case 0x0000: // Control
             // Write-only
             break
-            
         case 0x0001: // Mask
             // Write-only
             break
-            
         case 0x0002: // Status
             // Reading status has side effects
             data = (status.rawValue & 0xE0) | (ppuDataBuffer & 0x1F)
@@ -289,22 +504,17 @@ class OLC2C02 {
                 status.remove(.verticalBlank)
                 addressLatch = 0  // Reset latch
             }
-            
         case 0x0003: // OAM Address
             // Write-only
             break
-            
         case 0x0004: // OAM Data
             data = oam[Int(oamAddr)]
-            
         case 0x0005: // Scroll
             // Write-only
             break
-            
         case 0x0006: // PPU Address
             // Write-only
             break
-            
         case 0x0007: // PPU Data
             // Delayed read (except for palette data)
             data = ppuDataBuffer
@@ -316,7 +526,6 @@ class OLC2C02 {
             }
             // Auto-increment
             vramAddrReg.reg += control.contains(.incrementMode) ? 32 : 1
-            
         default:
             break
         }
@@ -330,12 +539,10 @@ class OLC2C02 {
         if address >= 0x0000 && address <= 0x1FFF {
             // Pattern table (CHR ROM/RAM on cartridge)
             _ = cart?.ppuRead(address: address, data: &data)
-            
         } else if address >= 0x2000 && address <= 0x3EFF {
             // Nametable RAM
             let (table, offset) = getMirroredNametableIndex(addr: address)
             data = tblName[table][offset]
-            
         } else if address >= 0x3F00 && address <= 0x3FFF {
             // Palette RAM
             var paletteAddr = address & 0x001F
@@ -357,12 +564,10 @@ class OLC2C02 {
         if address >= 0x0000 && address <= 0x1FFF {
             // Pattern table (CHR ROM/RAM on cartridge)
             _ = cart?.ppuWrite(address: address, data: data)
-            
         } else if address >= 0x2000 && address <= 0x3EFF {
             // Nametable RAM
             let (table, offset) = getMirroredNametableIndex(addr: address)
             tblName[table][offset] = data
-            
         } else if address >= 0x3F00 && address <= 0x3FFF {
             // Palette RAM
             var paletteAddr = address & 0x001F

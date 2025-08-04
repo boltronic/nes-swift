@@ -40,26 +40,44 @@ class SystemBus: Bus {
     }
     
     func cpuWrite(address: UInt16, data: UInt8) {
+        // Try cartridge first
+        if let cart = cart, cart.cpuWrite(address: address, data: data) {
+            return  // Cartridge handled it
+        }
+        
+        // No cartridge or cartridge didn't handle it
         if address >= 0x0000 && address <= 0x1FFF {
-            cpuRam[Int(address & 0x07FF )] = data
+            cpuRam[Int(address & 0x07FF)] = data
         }
         else if address >= 0x2000 && address <= 0x3FFF {
             ppu.cpuWrite(address & 0x0007, data)
         }
+        else if address >= 0x8000 && address <= 0xFFFF {
+            // For testing without cartridge - write to RAM
+            cpuRam[Int(address)] = data
+        }
     }
     
-    func cpuRead(address: UInt16, readOnly: Bool) -> UInt8 {
+    func cpuRead(address: UInt16, readOnly: Bool = false) -> UInt8 {
         var data: UInt8 = 0x00
         
-        if let cart = cart {
-            cart.cpuRead(address: address, data: &data)
+        // Try cartridge first
+        if let cart = cart, cart.cpuRead(address: address, data: &data) {
+            return data  // Cartridge provided data
         }
-        else if address >= 0x0000 && address <= 0x1FFF {
+        
+        // No cartridge or cartridge didn't handle it
+        if address >= 0x0000 && address <= 0x1FFF {
             return cpuRam[Int(address & 0x07FF)]
         }
-        else if (address >= 0x2000 && address <= 0x3FFF) {
+        else if address >= 0x2000 && address <= 0x3FFF {
             return ppu.cpuRead(address & 0x0007, readOnly)
         }
+        else if address >= 0x8000 && address <= 0xFFFF {
+            // For testing without cartridge - read from RAM
+            return cpuRam[Int(address)]
+        }
+        
         return data
     }
     
