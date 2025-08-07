@@ -24,3 +24,4 @@ struct nesApp: App {
         }
     }
 }
+

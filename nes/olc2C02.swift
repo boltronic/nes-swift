@@ -109,12 +109,24 @@ class OLC2C02 {
         }
     }
     
+    struct OAMEntry {
+        let y: UInt8        // Y position
+        let id: UInt8       // Tile ID
+        let attribute: UInt8 // Attributes (palette, flip, priority)
+        let x: UInt8        // X position
+        
+        var palette: UInt8 { (attribute & 0x03) + 4 }  // Sprite palettes are 4-7
+        var priority: Bool { attribute & 0x20 == 0 }   // 0 = front, 1 = behind
+        var flipH: Bool { attribute & 0x40 != 0 }
+        var flipV: Bool { attribute & 0x80 != 0 }
+    }
+    
     // MARK: - VRAM & Palette
     private var tblName: [[UInt8]]  = Array(repeating: Array(repeating: 0, count: 1024), count: 2)
     private var tblPalette: [UInt8] = Array(repeating: 0, count: 32)
     
     // MARK: - Frame Output
-    var framebuffer: [UInt8] = Array(repeating: 0, count: 256 * 240)
+    var framebuffer: [UInt32] = Array(repeating: 0xFF000000, count: 256 * 240)
     var frameComplete = false
     
     // MARK: - PPU Timing
@@ -133,7 +145,7 @@ class OLC2C02 {
     private var addressLatch: UInt8 = 0x00
     
     // MARK: - OAM (Sprite memory)
-    private var oam: [UInt8] = Array(repeating: 0, count: 256)
+    var oam: [UInt8] = Array(repeating: 0, count: 256) // public for testing
     private var ppuDataBuffer: UInt8    = 0x00  // For delayed reads
     private var oamAddr: UInt8          = 0x00  // OAM address pointer
     
@@ -150,8 +162,87 @@ class OLC2C02 {
     private var bg_shifter_pattern_hi: UInt16   = 0x0000
     private var bg_shifter_attribute_lo: UInt16 = 0x0000
     private var bg_shifter_attribute_hi: UInt16 = 0x0000
+    private var pixelDebugCount                 = 0
+
+    
+    //MARK: - Sprite Rendering
+    private var spriteScanline: [OAMEntry] = []  // Sprites on current scanline
+    internal var spriteCount: Int = 0
+    private var spriteShifterPatternLo: [UInt8] = Array(repeating: 0, count: 8)
+    private var spriteShifterPatternHi: [UInt8] = Array(repeating: 0, count: 8)
+    internal var spriteZeroHitPossible = false
+    private var spriteZeroBeingRendered = false
+    
+    func writeOAM(addr: UInt8, data: UInt8) {
+        oam[Int(addr)] = data
+        // DEBUG
+        if addr < 4 {
+            print("writeOAM[\(addr)] = \(String(format: "%02X", data))")
+        }
+    }
+    
+    // MARK: - Debug Visualization
+    private var patternTableDebug: [[UInt32]] = [
+        Array(repeating: 0xFF000000, count: 128 * 128),  // Pattern table 0
+        Array(repeating: 0xFF000000, count: 128 * 128)   // Pattern table 1
+    ]
+    
+    private var nametableDebug: [[UInt32]] = [
+        Array(repeating: 0xFF000000, count: 256 * 240),  // Nametable 0
+        Array(repeating: 0xFF000000, count: 256 * 240)   // Nametable 1
+    ]
+
+    var testPatternTable: [UInt8]? = nil
+    
     
     // MARK: - Background Rendering Helpers
+    private func fetchSpritePatterns() {
+        for i in 0..<spriteCount {
+            let sprite = spriteScanline[i]
+            
+            // Calculate pattern address
+            var spritePatternAddrLo: UInt16 = 0
+            var spritePatternAddrHi: UInt16 = 0
+            
+            if !control.contains(.spriteSize) {
+                // 8x8 sprites
+                let patternTable: UInt16 = control.contains(.spritePatternTable) ? 0x1000 : 0x0000
+                
+                // Handle vertical flip
+                var row = (scanline + 1) - UInt16(sprite.y)
+                if sprite.flipV {
+                    row = 7 - row
+                }
+                
+                spritePatternAddrLo = patternTable | (UInt16(sprite.id) << 4) | row
+            } else {
+                // 8x16 sprites - TODO: implement later
+            }
+            
+            spritePatternAddrHi = spritePatternAddrLo + 8
+            
+            // Fetch the patterns
+            var patternLo = ppuRead(spritePatternAddrLo)
+            var patternHi = ppuRead(spritePatternAddrHi)
+            
+            // Handle horizontal flip
+            if sprite.flipH {
+                patternLo = flipByte(patternLo)
+                patternHi = flipByte(patternHi)
+            }
+            
+            spriteShifterPatternLo[i] = patternLo
+            spriteShifterPatternHi[i] = patternHi
+        }
+    }
+
+    private func flipByte(_ b: UInt8) -> UInt8 {
+        var b = b
+        b = (b & 0xF0) >> 4 | (b & 0x0F) << 4
+        b = (b & 0xCC) >> 2 | (b & 0x33) << 2
+        b = (b & 0xAA) >> 1 | (b & 0x55) << 1
+        return b
+    }
     private func updateShifters() {
         if mask.contains(.showBackground) {
             // Shift the pattern shifters left by 1
@@ -279,33 +370,132 @@ class OLC2C02 {
     }
 
     private func renderPixel() {
+        guard mask.contains(.showBackground) || mask.contains(.showSprites) else { return }
+        
         let x = Int(cycle - 1)
         let y = Int(scanline)
         
-        // Get the pixel from the shifters
-        let bit_mux: UInt16 = 0x8000 >> fineX
         
-        let p0_pixel: UInt8 = (bg_shifter_pattern_lo & bit_mux) > 0 ? 1 : 0
-        let p1_pixel: UInt8 = (bg_shifter_pattern_hi & bit_mux) > 0 ? 1 : 0
-        let bg_pixel: UInt8 = (p1_pixel << 1) | p0_pixel
+        // Get background pixel
+        var bgPixel: UInt8 = 0
+        var bgPalette: UInt8 = 0
         
-        let bg_pal0: UInt8 = (bg_shifter_attribute_lo & bit_mux) > 0 ? 1 : 0
-        let bg_pal1: UInt8 = (bg_shifter_attribute_hi & bit_mux) > 0 ? 1 : 0
-        let bg_palette: UInt8 = (bg_pal1 << 1) | bg_pal0
         
-        // Get the palette index (0-63)
-        var paletteIndex: UInt8 = 0x00
-        if bg_pixel == 0 {
-            // Use the universal background color
-            paletteIndex = ppuRead(0x3F00)
-        } else {
-            // Use the selected palette and pixel value
-            paletteIndex = ppuRead(0x3F00 + (UInt16(bg_palette) << 2) + UInt16(bg_pixel))
+        if mask.contains(.showBackground) {
+            let bit_mux: UInt16 = 0x8000 >> fineX
+            
+            let p0_pixel: UInt8 = (bg_shifter_pattern_lo & bit_mux) > 0 ? 1 : 0
+            let p1_pixel: UInt8 = (bg_shifter_pattern_hi & bit_mux) > 0 ? 1 : 0
+            bgPixel = (p1_pixel << 1) | p0_pixel
+            
+            let bg_pal0: UInt8 = (bg_shifter_attribute_lo & bit_mux) > 0 ? 1 : 0
+            let bg_pal1: UInt8 = (bg_shifter_attribute_hi & bit_mux) > 0 ? 1 : 0
+            bgPalette = (bg_pal1 << 1) | bg_pal0
         }
         
-        // Store palette index in framebuffer
+        // Get sprite pixel
+        var spritePixel: UInt8 = 0
+        var spritePalette: UInt8 = 0
+        var spritePriority = false
+        
+        if mask.contains(.showSprites) {
+            spriteZeroBeingRendered = false
+            
+            for i in 0..<spriteCount {
+                let sprite = spriteScanline[i]
+                
+                // Check if sprite is in range for this pixel
+                let spriteX = Int(sprite.x)
+                if x >= spriteX && x < spriteX + 8 {
+                    let pixelX = x - spriteX
+                    
+                    let p0 = (spriteShifterPatternLo[i] & (0x80 >> pixelX)) != 0 ? 1 : 0
+                    let p1 = (spriteShifterPatternHi[i] & (0x80 >> pixelX)) != 0 ? 1 : 0
+                    let pixel = UInt8((p1 << 1) | p0)
+                    
+                    if pixel != 0 {  // Non-transparent pixel
+                        if i == 0 && spriteZeroHitPossible {
+                            spriteZeroBeingRendered = true
+                        }
+                        
+                        if spritePixel == 0 {  // Use first non-transparent sprite
+                            spritePixel = pixel
+                            spritePalette = sprite.palette
+                            spritePriority = sprite.priority
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Combine background and sprite
+        var finalPixel: UInt8 = 0
+        var finalPalette: UInt8 = 0
+        
+        if bgPixel == 0 && spritePixel == 0 {
+            // Both transparent - use backdrop
+            finalPixel = 0
+            finalPalette = 0
+        } else if bgPixel == 0 && spritePixel != 0 {
+            // Only sprite visible
+            finalPixel = spritePixel
+            finalPalette = spritePalette
+        } else if bgPixel != 0 && spritePixel == 0 {
+            // Only background visible
+            finalPixel = bgPixel
+            finalPalette = bgPalette
+        } else {
+            // Both visible - check priority
+            if spritePriority {
+                finalPixel = spritePixel
+                finalPalette = spritePalette
+            } else {
+                finalPixel = bgPixel
+                finalPalette = bgPalette
+            }
+            
+            // Sprite 0 hit detection
+            if spriteZeroHitPossible && spriteZeroBeingRendered {
+                let bgVisible = mask.contains(.showBackground) &&
+                    (mask.contains(.showBackgroundLeft) || x >= 8)
+                let spritesVisible = mask.contains(.showSprites) &&
+                    (mask.contains(.showSpritesLeft) || x >= 8)
+                if bgVisible && spritesVisible {
+                    print("Sprite zero hit set at X=\(x), Y=\(y)")
+                    status.insert(.spriteZeroHit)
+                }
+            }
+        }
+        
+//        if x == 50 && y == 50 {
+//            // Background nametable lookup
+//            let tileX = x / 8
+//            let tileY = y / 8
+//            let nametableIndex = tileY * 32 + tileX
+//            let ntselect = Int((control.contains(.nametableX) ? 1 : 0) | (control.contains(.nametableY) ? 2 : 0))
+//            let bgTileIndex = tblName[ntselect][nametableIndex]
+//            
+//            // Print pattern table bytes for BG and Sprite
+//            print("At (50,50):")
+//            print("  BG: tile=\(String(format: "%02X", bgTileIndex)), patternlsb=\(String(format: "%02X", bg_next_tile_lsb)), patternmsb=\(String(format: "%02X", bg_next_tile_msb)), bgPixel=\(bgPixel)")
+//            print("  Sprite0: OAM[0]=\(oam[0]) OAM[1]=\(oam[1]) OAM[2]=\(oam[2]) OAM[3]=\(oam[3]), spritePixel=\(spritePixel), spriteZeroBeingRendered=\(spriteZeroBeingRendered)")
+//            print("  mask=\(mask), control=\(control)")
+//            print("  spriteZeroHitPossible=\(spriteZeroHitPossible), status=\(status)")
+//        }
+        
+        // Get final color
+        var paletteAddr: UInt16 = 0x3F00
+        if finalPixel == 0 {
+            paletteAddr = 0x3F00  // Backdrop
+        } else {
+            paletteAddr = 0x3F00 + (UInt16(finalPalette) << 2) + UInt16(finalPixel)
+        }
+        
+        let paletteIndex = ppuRead(paletteAddr)
+        
+        // Store RGB value
         if x < 256 && y < 240 {
-            framebuffer[y * 256 + x] = paletteIndex
+            framebuffer[y * 256 + x] = NESPalette.getColor(paletteIndex)
         }
     }
     
@@ -351,28 +541,24 @@ class OLC2C02 {
     func clock() {
         // Background rendering happens on visible scanlines
         if scanline < 240 {  // Visible scanlines 0-239
+            
             // Visible portion of the frame
             if cycle >= 1 && cycle <= 256 {
                 // Shift the shift registers
                 updateShifters()
+                
                 // Every 8 cycles we perform a set of fetches
                 switch (cycle - 1) % 8 {
                 case 0:
-                    // Load the shifters with the previously fetched data
                     loadBackgroundShifters()
-                    // Fetch nametable byte (tile ID)
                     bg_next_tile_id = fetchNametableByte()
                 case 2:
-                    // Fetch attribute byte
                     bg_next_tile_attrib = fetchAttributeByte()
                 case 4:
-                    // Fetch pattern table tile low byte
                     bg_next_tile_lsb = fetchPatternTableLow()
                 case 6:
-                    // Fetch pattern table tile high byte
                     bg_next_tile_msb = fetchPatternTableHigh()
                 case 7:
-                    // Increment scroll counters
                     incrementScrollX()
                 default:
                     break
@@ -383,14 +569,54 @@ class OLC2C02 {
             if cycle == 256 {
                 incrementScrollY()
             }
+            
             if cycle == 257 {
-                // Reset X position
                 transferAddressX()
+                
+                // Sprite evaluation happens here
+                spriteScanline = []
+                spriteCount = 0
+                spriteZeroHitPossible = false
+                
+                // Evaluate which sprites are visible on the next scanline
+                for n in 0..<64 {
+                    let spriteY = oam[n * 4]
+                    let spriteHeight: Int = control.contains(.spriteSize) ? 16 : 8
+                    let diff = Int(scanline + 1) - Int(spriteY)
+                    
+                    if diff >= 0 && diff < spriteHeight && spriteCount < 8 {
+                        let entry = OAMEntry(
+                            y: spriteY,
+                            id: oam[n * 4 + 1],
+                            attribute: oam[n * 4 + 2],
+                            x: oam[n * 4 + 3]
+                        )
+                        
+                        spriteScanline.append(entry)
+                        
+                        if n == 0 {
+                            spriteZeroHitPossible = true
+                        }
+                        
+                        spriteCount += 1
+                    }
+                }
+                
+                if spriteCount >= 8 {
+                    status.insert(.spriteOverflow)
+                }
             }
+            
+            // Fetch sprite patterns
+            if cycle == 320 {
+                fetchSpritePatterns()
+            }
+            
             // Unused fetches at end of scanline (for MMC3 compatibility)
             if cycle == 337 || cycle == 339 {
                 bg_next_tile_id = fetchNametableByte()
             }
+            
             // Actually render the pixel
             if cycle >= 1 && cycle <= 256 {
                 renderPixel()
@@ -400,23 +626,21 @@ class OLC2C02 {
         // Pre-render scanline
         if scanline == 261 {
             if cycle == 1 {
-                // Clear vblank flag at start of pre-render line
                 status.remove(.verticalBlank)
+                status.remove(.spriteZeroHit)
+                status.remove(.spriteOverflow)
             }
+            
             if cycle >= 280 && cycle <= 304 {
-                // Reset Y position
                 transferAddressY()
             }
         }
         
-        // Vblank scanlines (241-260)
+        // Vblank
         if scanline == 241 && cycle == 1 {
-            if cycle == 1 {
-                status.insert(.verticalBlank)
-                
-                if control.contains(.enableNMI) {
-                    nmi = true
-                }
+            status.insert(.verticalBlank)
+            if control.contains(.enableNMI) {
+                nmi = true
             }
         }
         
@@ -427,7 +651,7 @@ class OLC2C02 {
             scanline += 1
             
             if scanline > 261 {
-                scanline = 0  // Wrap back to scanline 0
+                scanline = 0
                 frameComplete = true
             }
         }
@@ -446,7 +670,6 @@ class OLC2C02 {
             tempAddrReg.nametableY = control.contains(.nametableY)
         case 0x0001: // Mask
             mask = PPUMask(rawValue: data)
-            break
         case 0x0002: // Status
             // PPUSTATUS is read-only
             break
@@ -509,6 +732,9 @@ class OLC2C02 {
             break
         case 0x0004: // OAM Data
             data = oam[Int(oamAddr)]
+            if !readOnly {
+                oamAddr &+= 1  // Increment OAM address (wrapping at 255)
+            }
         case 0x0005: // Scroll
             // Write-only
             break
@@ -537,6 +763,10 @@ class OLC2C02 {
         let address = addr & 0x3FFF
         
         if address >= 0x0000 && address <= 0x1FFF {
+            // Check test pattern table first
+            if let testPattern = testPatternTable {
+                return testPattern[Int(address)]
+            }
             // Pattern table (CHR ROM/RAM on cartridge)
             _ = cart?.ppuRead(address: address, data: &data)
         } else if address >= 0x2000 && address <= 0x3EFF {

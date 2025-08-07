@@ -71,6 +71,25 @@ extension EmulatorTest {
     }
 }
 
+class TestCartridge: Cartridge {
+    var chrRam: [UInt8] = Array(repeating: 0, count: 0x2000)
+    
+    override func ppuWrite(address: UInt16, data: UInt8) -> Bool {
+        if address <= 0x1FFF {
+            chrRam[Int(address)] = data
+            return true
+        }
+        return false
+    }
+    
+    func ppuRead(address: UInt16) -> UInt8? {
+        if address <= 0x1FFF {
+            return chrRam[Int(address)]
+        }
+        return nil
+    }
+}
+
 class EmulatorTest {
     let bus = SystemBus()
     
@@ -141,7 +160,7 @@ func testNOP() {
     print("PC changed by: \(Int(test.bus.cpu.pc) - Int(pcBefore))")
     
     assert(test.bus.cpu.pc == pcBefore + 1, "NOP should increment PC by 1")
-    print("✓ NOP test passed\n")
+    print(" NOP test passed\n")
 }
 
 func testLDAImmediate() {
@@ -172,7 +191,7 @@ func testLDAImmediate() {
     assert(test.bus.cpu.a == 0x42, "A register should be 0x42")
     assert(test.bus.cpu.status & 0x02 == 0, "Zero flag should be clear")
     assert(test.bus.cpu.status & 0x80 == 0, "Negative flag should be clear")
-    print("✓ LDA test passed\n")
+    print(" LDA test passed\n")
 }
 
 func testMultiplicationProgram() {
@@ -224,7 +243,7 @@ func testMultiplicationProgram() {
     print("Memory[2] = \(test.bus.cpuRam[2]) (should be 30)")
     
     assert(test.bus.cpuRam[2] == 30, "10 × 3 should equal 30")
-    print("✓ Multiplication test passed\n")
+    print(" Multiplication test passed\n")
 }
 
 func runWithTrace(instructions: Int) {
@@ -258,7 +277,7 @@ func testLDAZeroPage() {
     test.executeOneInstruction()
     
     assert(test.bus.cpu.a == 0x33, "A should be 0x33")
-    print("✓ LDA Zero Page test passed\n")
+    print(" LDA Zero Page test passed\n")
 }
 
 func testADCWithCarry() {
@@ -275,7 +294,7 @@ func testADCWithCarry() {
     
     assert(test.bus.cpu.a == 0x00, "A should wrap to 0x00")
     assert(test.bus.cpu.status & 0x01 != 0, "Carry flag should be set")
-    print("✓ ADC with carry test passed\n")
+    print(" ADC with carry test passed\n")
 }
 
 func testStackPushPull() {
@@ -298,7 +317,7 @@ func testStackPushPull() {
     
     assert(test.bus.cpu.a == 0x42, "A should be restored to 0x42")
     assert(test.bus.cpu.stkp == spBefore, "Stack pointer should be restored")
-    print("✓ Stack test passed\n")
+    print(" Stack test passed\n")
 }
 
 
@@ -324,6 +343,16 @@ func runAllTests() {
         ("PPU Frame Complete", testPPUFrameComplete),
         ("PPU Palette Memory", testPPUPaletteMemory),
         ("PPU Framebuffer", testPPUFramebuffer),
+        
+        ("Sprite OAM", testSpriteOAM),
+        ("Sprite DMA", testSpriteDMA),
+        ("Sprite Rendering", testSpriteRendering),
+        ("Sprite Zero Hit", testSpriteZeroHit),
+        
+        ("Controller Basics",testControllerBasics),
+        ("Controller Strobe",testControllerStrobe),
+        ("Controller Sequence",testControllerSequence),
+        
 //        ("Visual Multiplication", testMultiplicationProgramVisual)
     ]
     
@@ -392,7 +421,7 @@ func testMultiplicationProgramVisual() {
     test.printMemoryDump(from: 0x0000, length: 16)
     
     print("\nResult: \(test.bus.cpuRam[0]) × \(test.bus.cpuRam[1]) = \(test.bus.cpuRam[2])")
-    print("✓ Visual multiplication test complete\n")
+    print(" Visual multiplication test complete\n")
 }
 
 func interactiveDebug() {
@@ -463,7 +492,7 @@ func testPPURegisters() {
     assert(status & 0x80 != 0, "Should read vblank as set")
     assert(!test.bus.ppu.status.contains(.verticalBlank), "Vblank should be cleared after read")
     
-    print("✓ PPU register test passed\n")
+    print(" PPU register test passed\n")
 }
 
 func testPPUAddressLatch() {
@@ -485,7 +514,7 @@ func testPPUAddressLatch() {
     let directRead = test.bus.ppu.ppuRead(0x2108)
     assert(directRead == 0x42, "Data should be written to VRAM")
     
-    print("✓ PPU address latch test passed\n")
+    print(" PPU address latch test passed\n")
 }
 
 func testPPUScrollRegisters() {
@@ -504,7 +533,7 @@ func testPPUScrollRegisters() {
     // Reading status should reset the latch
     _ = test.bus.cpuRead(address: 0x2002, readOnly: false)
     
-    print("✓ PPU scroll test passed\n")
+    print(" PPU scroll test passed\n")
 }
 
 func testPPUVBlank() {
@@ -523,7 +552,7 @@ func testPPUVBlank() {
     assert(test.bus.ppu.status.contains(.verticalBlank), "VBlank should be set at scanline 241")
     assert(test.bus.ppu.nmi == true, "NMI should be triggered")
     
-    print("✓ PPU vblank test passed\n")
+    print(" PPU vblank test passed\n")
 }
 
 func testPPUFrameComplete() {
@@ -544,7 +573,7 @@ func testPPUFrameComplete() {
     // Reset frame complete flag
     test.bus.ppu.frameComplete = false
     
-    print("✓ PPU frame complete test passed\n")
+    print(" PPU frame complete test passed\n")
 }
 
 func testPPUPaletteMemory() {
@@ -563,7 +592,7 @@ func testPPUPaletteMemory() {
     let mirror = test.bus.ppu.ppuRead(0x3F10)
     assert(mirror == 0x0F, "0x3F10 should mirror to 0x3F00")
     
-    print("✓ PPU palette memory test passed\n")
+    print(" PPU palette memory test passed\n")
 }
 
 func testPPUFramebuffer() {
@@ -593,7 +622,7 @@ func testPPUFramebuffer() {
     let hasData = test.bus.ppu.framebuffer.contains(where: { $0 != 0 })
     assert(hasData || true, "Framebuffer should contain some non-zero data")  // || true for now since rendering needs pattern data
     
-    print("✓ PPU framebuffer test passed\n")
+    print(" PPU framebuffer test passed\n")
 }
 
 // Run all PPU tests
@@ -609,4 +638,353 @@ func runPPUTests() {
     testPPUFramebuffer()
     
     print("All PPU tests passed! 🎉\n")
+}
+
+// MARK: - Sprite Tests
+
+func testSpriteOAM() {
+    print("=== Testing Sprite OAM ===")
+    let test = EmulatorTest()
+    
+    // Write to OAM via registers
+    test.bus.cpuWrite(address: 0x2003, data: 0x00)  // OAM address = 0
+    test.bus.cpuWrite(address: 0x2004, data: 0x70)  // Y position = 112
+    test.bus.cpuWrite(address: 0x2004, data: 0x01)  // Tile ID = 1
+    test.bus.cpuWrite(address: 0x2004, data: 0x02)  // Attributes = 2
+    test.bus.cpuWrite(address: 0x2004, data: 0x80)  // X position = 128
+    
+    // DEBUG: Check what's in OAM directly
+    print("OAM[0-3]: \(test.bus.ppu.oam[0...3].map { String(format: "%02X", $0) })")
+    
+    // Read back OAM data - need to reset address for each read
+    test.bus.cpuWrite(address: 0x2003, data: 0x00)
+    let y = test.bus.cpuRead(address: 0x2004)
+    
+    test.bus.cpuWrite(address: 0x2003, data: 0x01)  // Set to position 1
+    let tileId = test.bus.cpuRead(address: 0x2004)
+    
+    test.bus.cpuWrite(address: 0x2003, data: 0x02)  // Set to position 2
+    let attr = test.bus.cpuRead(address: 0x2004)
+    
+    test.bus.cpuWrite(address: 0x2003, data: 0x03)  // Set to position 3
+    let x = test.bus.cpuRead(address: 0x2004)
+    
+    print("Read values: Y=\(String(format: "%02X", y)), Tile=\(String(format: "%02X", tileId)), Attr=\(String(format: "%02X", attr)), X=\(String(format: "%02X", x))")
+    
+    assert(y == 0x70, "Y position should be 0x70")
+    assert(tileId == 0x01, "Tile ID should be 0x01")
+    assert(attr == 0x02, "Attributes should be 0x02")
+    assert(x == 0x80, "X position should be 0x80")
+    
+    print(" OAM test passed\n")
+}
+func testSpriteDMA() {
+    print("=== Testing Sprite DMA ===")
+    let test = EmulatorTest()
+    
+    // Set up test data in CPU memory at page 0x02 (0x0200-0x02FF)
+    for i in 0..<256 {
+        test.bus.cpuWrite(address: 0x0200 + UInt16(i), data: UInt8(i))
+    }
+    
+    // DEBUG: Verify CPU memory has test data
+    print("CPU Memory at 0x0200-0x0203: ", terminator: "")
+    for i in 0...3 {
+        let data = test.bus.cpuRead(address: 0x0200 + UInt16(i), readOnly: true)
+        print("\(String(format: "%02X", data)) ", terminator: "")
+    }
+    print()
+    
+    // Check OAM before DMA
+    print("OAM[0-3] before DMA: \(test.bus.ppu.oam[0...3].map { String(format: "%02X", $0) })")
+    
+    // Perform DMA from page 0x02
+    test.bus.cpuWrite(address: 0x4014, data: 0x02)
+    
+    // DEBUG: Check OAM directly
+    print("OAM[0-3] after DMA: \(test.bus.ppu.oam[0...3].map { String(format: "%02X", $0) })")
+    
+    // Verify OAM contains the data
+    test.bus.cpuWrite(address: 0x2003, data: 0x00)  // Reset OAM address to 0
+    
+    // Read 4 bytes sequentially - OAM address auto-increments
+    for i in 0..<4 {
+        let data = test.bus.cpuRead(address: 0x2004)
+        print("OAM[\(i)] via register = \(String(format: "%02X", data))")
+        assert(data == UInt8(i), "OAM[\(i)] should be \(i), got \(data)")
+    }
+    
+    print(" Sprite DMA test passed\n")
+}
+
+
+func testSpriteRendering() {
+    print("=== Testing Sprite Rendering ===")
+    let test = EmulatorTest()
+    
+    // Enable test pattern table
+    test.bus.ppu.testPatternTable = Array(repeating: 0, count: 0x2000)
+    
+    // Enable rendering
+    test.bus.cpuWrite(address: 0x2001, data: 0x18)  // Show background + sprites
+    
+    // Set up a sprite at position (100, 100)
+    test.bus.ppu.writeOAM(addr: 0, data: 99)   // Y = 99 → Appears at scanline 100
+    test.bus.ppu.writeOAM(addr: 1, data: 0x01) // Tile ID
+    test.bus.ppu.writeOAM(addr: 2, data: 0x00) // Attributes
+    test.bus.ppu.writeOAM(addr: 3, data: 100)  // X = 100
+    
+    // Set sprite palette
+    test.bus.ppu.ppuWrite(0x3F11, 0x16)  // Sprite palette 0, color 1 = red
+    test.bus.ppu.ppuWrite(0x3F12, 0x27)  // Sprite palette 0, color 2 = orange
+    test.bus.ppu.ppuWrite(0x3F13, 0x18)  // Sprite palette 0, color 3 = yellow
+    
+    // Write a test pattern to CHR memory (a simple box)
+    for i in 0..<8 {
+        let pattern: UInt8 = (i == 0 || i == 7) ? 0xFF : 0x81
+        test.bus.ppu.testPatternTable![0x0010 + i] = pattern      // Low byte
+        test.bus.ppu.testPatternTable![0x0018 + i] = pattern      // High byte
+    }
+    
+    // Run one frame
+    let cyclesPerFrame = 262 * 341
+    for _ in 0..<cyclesPerFrame {
+        test.bus.ppu.clock()
+    }
+    
+    // Check that sprite pixels were rendered
+    // At position (100, 100), we should see sprite data
+    let pixelIndex = 100 * 256 + 100
+    let pixel = test.bus.ppu.framebuffer[pixelIndex]
+    
+    // The pixel should not be the background color
+    let backgroundColor = test.bus.ppu.framebuffer[0]  // Top-left should be background
+    
+    print("Pixel at (100,100): \(String(format: "%08X", pixel))")
+    print("Background color: \(String(format: "%08X", backgroundColor))")
+    
+    assert(pixel != backgroundColor, "Sprite should be visible at (100, 100)")
+    
+    print(" Sprite rendering test passed\n")
+}
+
+
+func testSpriteZeroHit() {
+    print("=== Testing Sprite Zero Hit ===")
+    let test = EmulatorTest()
+    
+    test.bus.ppu.testPatternTable = Array(repeating: 0, count: 0x2000)
+    
+    
+    
+    // Enable rendering
+    test.bus.cpuWrite(address: 0x2001, data: 0x18)  // Show background + sprites
+    
+    // Set control register to use pattern table 0 for both BG and sprites
+    test.bus.cpuWrite(address: 0x2000, data: 0x00)
+    
+    // Set sprite 0 to overlap with background at position (50, 50)
+    test.bus.ppu.writeOAM(addr: 0, data: 50)   // Y
+    test.bus.ppu.writeOAM(addr: 1, data: 0x01) // Tile ID 1
+    test.bus.ppu.writeOAM(addr: 2, data: 0x00) // Attributes
+    test.bus.ppu.writeOAM(addr: 3, data: 50)   // X
+    
+    for i in 0..<8 {
+        test.bus.ppu.testPatternTable![0x0010 + i] = 0xFF  // Sprite pattern
+        test.bus.ppu.testPatternTable![0x0018 + i] = 0xFF
+        test.bus.ppu.testPatternTable![0x0000 + i] = 0xFF  // BG pattern
+        test.bus.ppu.testPatternTable![0x0008 + i] = 0xFF
+    }
+    
+    // Debug: Verify OAM
+    print("OAM[0-3]: \(test.bus.ppu.oam[0...3].map { String(format: "%02X", $0) })")
+    
+    // Write a solid pattern for sprite tile 1 (all pixels on)
+    for i in 0..<8 {
+        test.bus.ppu.ppuWrite(UInt16(0x0010 + i), 0xFF)      // Pattern low
+        test.bus.ppu.ppuWrite(UInt16(0x0018 + i), 0xFF)      // Pattern high (offset by 8)
+    }
+    
+    // Write background pattern at tile 0 (solid)
+    for i in 0..<8 {
+        test.bus.ppu.ppuWrite(UInt16(0x0000 + i), 0xFF)      // Pattern low
+        test.bus.ppu.ppuWrite(UInt16(0x0008 + i), 0xFF)      // Pattern high
+    }
+    
+    // Fill nametable with tile 0 (so background is visible)
+    for i in 0..<1024 {
+        test.bus.ppu.ppuWrite(UInt16(0x2000 + i), 0x00)  // Tile 0 everywhere
+    }
+    
+    // Set palettes so both are visible
+    test.bus.ppu.ppuWrite(0x3F00, 0x0F)  // Universal background
+    test.bus.ppu.ppuWrite(0x3F01, 0x15)  // Background palette 0, color 1
+    test.bus.ppu.ppuWrite(0x3F11, 0x16)  // Sprite palette 0, color 1
+    
+    // Check if sprite evaluation is working
+    print("\nRunning frame...")
+    
+    var hitDetected = false
+    var spriteEvaluated = false
+    var frameCount = 0
+    
+    // Run for 2 frames to ensure everything is set up
+    for frame in 0..<2 {
+        for i in 0..<(262 * 341) {
+            test.bus.ppu.clock()
+            
+            // Debug sprite evaluation at scanline 50
+//            if test.bus.ppu.scanline == 50 && test.bus.ppu.cycle == 257 && !spriteEvaluated {
+//                print("At scanline 50, cycle 257:")
+//                print("  Sprite count: \(test.bus.ppu.spriteCount)")
+//                print("  Sprite zero hit possible: \(test.bus.ppu.spriteZeroHitPossible)")
+//                spriteEvaluated = true
+//            }
+            
+            // Check for hit
+            if test.bus.ppu.status.contains(.spriteZeroHit) && !hitDetected {
+                hitDetected = true
+                print("Sprite zero hit detected at scanline \(test.bus.ppu.scanline), cycle \(test.bus.ppu.cycle)")
+                break
+            }
+        }
+        
+        if hitDetected { break }
+        print("Frame \(frame + 1) complete, no hit yet")
+    }
+    
+    if !hitDetected {
+        print("\nNo sprite zero hit detected after 2 frames")
+        print("Final PPU status: \(test.bus.ppu.status)")
+        
+        // Check framebuffer at position (50, 50)
+        let pixelIndex = 50 * 256 + 50
+        print("Framebuffer at (50,50): \(String(format: "%08X", test.bus.ppu.framebuffer[pixelIndex]))")
+    }
+    
+    assert(hitDetected, "Sprite zero hit should be detected")
+    print(" Sprite zero hit test passed\n")
+}
+
+func testControllerBasics() {
+    print("=== Testing Controller Basics ===")
+    let controller = NESController()
+    
+    // Test 1: No buttons pressed
+    controller.buttons = []
+    controller.write(1)  // Strobe high (latch)
+    controller.write(0)  // Strobe low (ready to read)
+    
+    for i in 0..<8 {
+        let bit = controller.read()
+        assert(bit == 0x40, "Bit \(i) should be 0 (plus bit 6 set)")
+    }
+    
+    // Test 2: All buttons pressed
+    controller.buttons = [.a, .b, .select, .start, .up, .down, .left, .right]
+    controller.write(1)  // Strobe high (latch)
+    controller.write(0)  // Strobe low (ready to read)
+    
+    let expectedOrder: [Controller] = [.a, .b, .select, .start, .up, .down, .left, .right]
+    for (i, button) in expectedOrder.enumerated() {
+        let bit = controller.read()
+        let expected: UInt8 = controller.buttons.contains(button) ? 0x41 : 0x40
+        assert(bit == expected, "Bit \(i) (\(button)) should be \(expected), got \(bit)")
+    }
+    
+    print("✓ Controller basics test passed\n")
+}
+
+func testControllerStrobe() {
+    print("=== Testing Controller Strobe ===")
+    let controller = NESController()
+    
+    // Set some buttons
+    controller.buttons = [.a, .start]
+    
+    // Test continuous strobe (should always read current button state)
+    controller.write(1)  // Strobe high
+    
+    // Should always read A button (bit 7)
+    for _ in 0..<10 {
+        let bit = controller.read()
+        assert(bit == 0x41, "Should always read A button when strobe is high")
+    }
+    
+    // Change buttons while strobe is high
+    controller.buttons = [.b]
+    let bit = controller.read()
+    assert(bit == 0x40, "Should immediately reflect button change")
+    
+    print("✓ Controller strobe test passed\n")
+}
+
+func testControllerSequence() {
+    print("=== Testing Controller Read Sequence ===")
+    let controller = NESController()
+    
+    // Test typical game read sequence
+    controller.buttons = [.a, .left, .up]  // A=1, Left=1, Up=1, others=0
+    
+    controller.write(1)  // Latch current state
+    controller.write(0)  // Begin reading
+    
+    // Expected sequence: A B Sel Start Up Down Left Right
+    let expected: [UInt8] = [
+        0x41,  // A pressed
+        0x40,  // B not pressed
+        0x40,  // Select not pressed
+        0x40,  // Start not pressed
+        0x41,  // Up pressed
+        0x40,  // Down not pressed
+        0x41,  // Left pressed
+        0x40   // Right not pressed
+    ]
+    
+    for (i, expectedBit) in expected.enumerated() {
+        let bit = controller.read()
+        assert(bit == expectedBit, "Read \(i) should be \(expectedBit), got \(bit)")
+    }
+    
+    // After 8 reads, should get 1s (0x41)
+    for i in 8..<12 {
+        let bit = controller.read()
+        assert(bit == 0x41, "Read \(i) should be 0x41 (filled with 1s)")
+    }
+    
+    print("✓ Controller sequence test passed\n")
+}
+
+func testControllerIntegration() {
+    print("=== Testing Controller Integration ===")
+    let test = EmulatorTest()
+    
+    // Assuming you've integrated controllers into SystemBus
+    // test.bus.controller1.buttons = [.a, .start]
+    
+    // Write strobe
+    test.bus.cpuWrite(address: 0x4016, data: 0x01)
+    test.bus.cpuWrite(address: 0x4016, data: 0x00)
+    
+    // Read controller state
+    let a = test.bus.cpuRead(address: 0x4016)
+    let b = test.bus.cpuRead(address: 0x4016)
+    let select = test.bus.cpuRead(address: 0x4016)
+    let start = test.bus.cpuRead(address: 0x4016)
+    
+    print("Controller reads: A=\(a & 1) B=\(b & 1) Sel=\(select & 1) Start=\(start & 1)")
+    
+    print("✓ Controller integration test passed\n")
+}
+
+// Add to your test runner
+func runControllerTests() {
+    print("\n=== Starting Controller Tests ===\n")
+    
+    testControllerBasics()
+    testControllerStrobe()
+    testControllerSequence()
+    // testControllerIntegration() // Uncomment when integrated with SystemBus
+    
+    print("All controller tests passed! 🎮\n")
 }

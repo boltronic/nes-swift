@@ -44,7 +44,22 @@ class SystemBus: Bus {
         if let cart = cart, cart.cpuWrite(address: address, data: data) {
             return  // Cartridge handled it
         }
-        
+        if address == 0x4014 {
+            // OAM DMA - copy 256 bytes from CPU page to OAM
+            let page = UInt16(data) << 8
+            
+            // DEBUG
+            print("DMA from page \(String(format: "%02X", data)) (address \(String(format: "%04X", page)))")
+
+            
+            for i in 0..<256 {
+                let byte = cpuRead(address: page + UInt16(i), readOnly: true)
+                ppu.writeOAM(addr: UInt8(i), data: byte)
+            }
+            // DMA takes 513 or 514 CPU cycles
+            // For now, we'll just do it instantly
+            return
+        }
         // No cartridge or cartridge didn't handle it
         if address >= 0x0000 && address <= 0x1FFF {
             cpuRam[Int(address & 0x07FF)] = data
