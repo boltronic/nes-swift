@@ -161,15 +161,15 @@ class OLC6502 {
     // form location 0xFFFA.
     func nmi() {
         write(0x0100 + UInt16(stkp), UInt8((pc >> 8) & 0x00FF))
-        stkp -= 1
+        stkp &-= 1
         write(0x0100 + UInt16(stkp), UInt8(pc & 0x00FF))
-        stkp -= 1
+        stkp &-= 1
         
         setFlag(.B, false)
         setFlag(.U, true)
         setFlag(.I, true)
         write(0x0100 + UInt16(stkp), status)
-        stkp -= 1
+        stkp &-= 1
         
         addr_abs = 0xFFFA
         let lo = UInt16(read(addr_abs + 0))

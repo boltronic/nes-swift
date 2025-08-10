@@ -22,6 +22,9 @@ class SystemBus: Bus {
     
     private var systemClockCounter: UInt32 = 0
     
+    let controller1 = NESController()
+    let controller2 = NESController()
+    
     init() {
         cpu = OLC6502()
         ppu = OLC2C02()
@@ -44,13 +47,14 @@ class SystemBus: Bus {
         if let cart = cart, cart.cpuWrite(address: address, data: data) {
             return  // Cartridge handled it
         }
+        
         if address == 0x4014 {
             // OAM DMA - copy 256 bytes from CPU page to OAM
             let page = UInt16(data) << 8
             
-            // DEBUG
+            #if DEBUG_GRANULAR
             print("DMA from page \(String(format: "%02X", data)) (address \(String(format: "%04X", page)))")
-
+            #endif
             
             for i in 0..<256 {
                 let byte = cpuRead(address: page + UInt16(i), readOnly: true)
@@ -60,16 +64,30 @@ class SystemBus: Bus {
             // For now, we'll just do it instantly
             return
         }
+        else if address == 0x4016 {
+            // Controller strobe
+            #if DEBUG_GRANULAR
+            print("Controller strobe write: \(String(format: "%02X", data))")
+            #endif
+            controller1.write(data)
+            controller2.write(data)
+        }
         // No cartridge or cartridge didn't handle it
-        if address >= 0x0000 && address <= 0x1FFF {
+        else if address >= 0x0000 && address <= 0x1FFF {
             cpuRam[Int(address & 0x07FF)] = data
         }
         else if address >= 0x2000 && address <= 0x3FFF {
-            ppu.cpuWrite(address & 0x0007, data)
+            let ppuAddr = address & 0x0007
+            
+            // DEBUG: Log PPU writes
+//            print("CPU writing $\(String(format: "%04X", address)) (PPU $\(String(format: "%04X", ppuAddr))): \(String(format: "%02X", data))")
+            
+            ppu.cpuWrite(ppuAddr, data)
         }
         else if address >= 0x8000 && address <= 0xFFFF {
-            // For testing without cartridge - write to RAM
-            cpuRam[Int(address)] = data
+            // ROM area - typically read-only, but some mappers allow writes
+            // Log this as it might indicate an issue
+            print("Warning: Attempted write to ROM area $\(String(format: "%04X", address)): \(String(format: "%02X", data))")
         }
     }
     
@@ -87,6 +105,19 @@ class SystemBus: Bus {
         }
         else if address >= 0x2000 && address <= 0x3FFF {
             return ppu.cpuRead(address & 0x0007, readOnly)
+        }
+        else if address == 0x4016 {
+            // Controller 1 port
+            data = controller1.read()
+            
+            #if DEBUG_GRANULAR
+            print("Game reading controller 1: \(String(format: "%02X", data)) (buttons: \(String(format: "%02X", controller1.buttons.rawValue)))")
+            #endif
+            return data
+        }
+        else if address == 0x4017 {
+            // Controller 2 port
+            data = controller2.read()
         }
         else if address >= 0x8000 && address <= 0xFFFF {
             // For testing without cartridge - read from RAM
@@ -107,19 +138,40 @@ class SystemBus: Bus {
         ppu.reset()
         cart?.reset()
         systemClockCounter = 0
+        
+        // Clear RAM to prevent undefined behavior
+        for i in 0..<2048 {
+            cpuRam[i] = 0x00
+        }
+        
+        // If we have a cartridge, it should provide the reset vector
+        // Otherwise, the test program should have set it
+        if cart == nil {
+            // Ensure we have a valid reset vector for test programs
+            if cpuRam[0xFFFC] == 0 && cpuRam[0xFFFD] == 0 {
+                print("Warning: No reset vector set!")
+                // Set a default that points to a safe location
+                cpuRam[0xFFFC] = 0x00
+                cpuRam[0xFFFD] = 0x80
+            }
+        }
+
     }
     
     func clock() {
         ppu.clock()
         
-        if systemClockCounter % 3 == 0 {
-            cpu.clock();
-        }
-        
-        if (ppu.nmi) {
+        // Handle NMI immediately after PPU clocks
+        if ppu.nmi {
             ppu.nmi = false
             cpu.nmi()
         }
+        
+        // Clock CPU every 3rd PPU cycle
+        if systemClockCounter % 3 == 0 {
+            cpu.clock()
+        }
+        
         systemClockCounter += 1
     }
 }

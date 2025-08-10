@@ -41,8 +41,12 @@ class Mapper000: Mapper {
     func ppuMapRead(addr: UInt16, mappedAddr: inout UInt32) -> Bool {
         // There is no mapping required for PPU
         // PPU Address Bus          CHR ROM
-        // 0x0000 -> 0x1FFF: Map    0x0000 -> 0x1FFF
- 
+        // 0x0000 -> 0x1FFF: Map    0x0000 -> 0x1FFF 
+        if addr >= 0x0000 && addr <= 0x1FFF {
+            mappedAddr = UInt32(addr)
+            return true  // <-- This needs to return true!
+        }
+
         return false
     }
     

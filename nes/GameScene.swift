@@ -11,17 +11,17 @@ class GameScene: SKScene {
     private var screenNode: SKSpriteNode!
     private var screenTexture: SKMutableTexture!
     private var pixelBuffer: [UInt32] = []
-//    weak var scene: GameScene?
+
     
-    weak var emulator: SystemBus?  // Reference to our emulator
+    weak var emulator: SystemBus?
     
     override func didMove(to view: SKView) {
         backgroundColor = .black
         
-        // Create a buffer for our NES display (256x240)
+        // NES Display (256x240)
         pixelBuffer = Array(repeating: 0xFF000000, count: 256 * 240)  // Black initially
         
-        // Create texture from our pixel buffer
+        // Create texture from pixel buffer
         screenTexture = SKMutableTexture(size: CGSize(width: 256, height: 240))
         
         // Create sprite node to display the texture
@@ -30,13 +30,104 @@ class GameScene: SKScene {
         screenNode.position = CGPoint(x: frame.midX, y: frame.midY)
         screenNode.texture?.filteringMode = .nearest  // Pixelated look
         
+        // NES renders from top left to bottom right, so flip vertically
+        screenNode.yScale = -1
+        
         addChild(screenNode)
+        
+        self.view?.window?.makeFirstResponder(self)
+        
+        DispatchQueue.main.async { [weak self] in
+            self?.view?.window?.makeFirstResponder(self)
+            print("GameScene: Requested first responder")
+        }
         
         // Test pattern - gradient
 //        testPattern()
 //        updateScreen()
     }
     
+    override var acceptsFirstResponder: Bool {
+        print("GameScene: acceptsFirstResponder called")
+        return true
+    }
+    
+    override func keyDown(with event: NSEvent) {
+        handleKeyEvent(event, isPressed: true)
+    }
+    
+    override func keyUp(with event: NSEvent) {
+        handleKeyEvent(event, isPressed: false)
+    }
+    
+    private func handleKeyEvent(_ event: NSEvent, isPressed: Bool) {
+        guard let emulator = emulator else { return }
+        
+        let controller = emulator.controller1
+        
+        // Debug: Print key events
+        print("Key \(isPressed ? "DOWN" : "UP"): \(event.charactersIgnoringModifiers ?? "?")")
+        
+        // Map keyboard to NES buttons
+        // Map keyboard to NES buttons
+        switch event.charactersIgnoringModifiers?.lowercased() {
+        case "w":
+            if isPressed {
+                controller.buttons.insert(.up)
+            } else {
+                controller.buttons.remove(.up)
+            }
+        case "a":
+            if isPressed {
+                controller.buttons.insert(.left)
+            } else {
+                controller.buttons.remove(.left)
+            }
+        case "s":
+            if isPressed {
+                controller.buttons.insert(.down)
+            } else {
+                controller.buttons.remove(.down)
+            }
+        case "d":
+            if isPressed {
+                controller.buttons.insert(.right)
+            } else {
+                controller.buttons.remove(.right)
+            }
+        case "k":
+            if isPressed {
+                controller.buttons.insert(.a)
+            } else {
+                controller.buttons.remove(.a)
+            }
+        case "l":
+            if isPressed {
+                controller.buttons.insert(.b)
+            } else {
+                controller.buttons.remove(.b)
+            }
+        case "i":
+            if isPressed {
+                controller.buttons.insert(.select)
+            } else {
+                controller.buttons.remove(.select)
+            }
+        case "o":
+            if isPressed {
+                controller.buttons.insert(.start)
+            } else {
+                controller.buttons.remove(.start)
+            }
+        default:
+            print("Unmapped key: \(event.charactersIgnoringModifiers ?? "?")")
+            return
+        }
+        
+        // Always print current button state after any change
+        print("Controller buttons: \(String(format: "%02X", controller.buttons.rawValue))")
+    }
+
     func testPattern() {
         // Create a test pattern to verify palette colors
         for y in 0..<240 {
@@ -57,7 +148,7 @@ class GameScene: SKScene {
     }
     
     func updateScreen() {
-        // Convert our UInt32 buffer to raw bytes for the texture
+        // Convert UInt32 buffer to raw bytes for the texture
         pixelBuffer.withUnsafeBytes { ptr in
             screenTexture.modifyPixelData { pixelData, lengthInBytes in
                 memcpy(pixelData, ptr.baseAddress, lengthInBytes)

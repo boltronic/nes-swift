@@ -32,9 +32,9 @@ class Cartridge {
     private var imageValid          = false
     private var prgMemory: [UInt8]  = []
     private var chrMemory: [UInt8]  = []
-    private var mapperID: UInt8     = 0
-    private var prgBanks: UInt8     = 0
-    private var chrBanks: UInt8     = 0
+    internal var mapperID: UInt8    = 0
+    internal var prgBanks: UInt8    = 0
+    internal var chrBanks: UInt8    = 0
     private var mirror: Mirror      = .horizontal
     private var mapper: Mapper?
     
@@ -96,9 +96,20 @@ class Cartridge {
                 let chrSize = Int(chrBanks) * 8192  // 8KB per bank
                 guard data.count >= dataOffset + chrSize else { return nil }
                 chrMemory = Array(data[dataOffset..<(dataOffset + chrSize)])
+                
+                #if DEBUG_GRANULAR
+                // Debug: Verify CHR data was loaded
+                print("CHR ROM loaded: \(chrSize) bytes")
+                print("First 16 bytes of CHR:")
+                for i in 0..<min(16, chrMemory.count) {
+                    print(String(format: "%02X ", chrMemory[i]), terminator: "")
+                    if i % 8 == 7 { print("") }
+                }
+                #endif
             } else {
                 // CHR RAM - allocate 8KB
                 chrMemory = Array(repeating: 0, count: 8192)
+                print("No CHR ROM - using CHR RAM")
             }
         }
         
@@ -148,10 +159,29 @@ class Cartridge {
     
     func ppuRead(address: UInt16, data: inout UInt8) -> Bool {
         var mappedAddr: UInt32 = 0
+        
+        // Debug trace
+        let shouldDebug = address < 0x10
+        
         if let mapper = mapper, mapper.ppuMapRead(addr: address, mappedAddr: &mappedAddr) {
             if mappedAddr < chrMemory.count {
                 data = chrMemory[Int(mappedAddr)]
+                #if DEBUG_GRANULAR
+                if shouldDebug {
+                    print("Cartridge: Read $\(String(format: "%04X", address)) → [\(String(format: "%08X", mappedAddr))] = $\(String(format: "%02X", data))")
+                }
+                #endif
                 return true
+            } else {
+                #if DEBUG_GRANULAR
+                if shouldDebug {
+                    print("Cartridge: Read $\(String(format: "%04X", address)) → mapped address \(mappedAddr) out of bounds (CHR size: \(chrMemory.count))")
+                }
+                #endif
+            }
+        } else {
+            if shouldDebug {
+                print("Cartridge: Mapper returned false for address $\(String(format: "%04X", address))")
             }
         }
         return false
