@@ -321,54 +321,6 @@ func testStackPushPull() {
 }
 
 
-
-func runAllTests() {
-    print("Starting 6502 Emulator Tests\n")
-    
-    var passed = 0
-    var failed = 0
-    
-    runPPUTests()
-    let tests = [
-        ("NOP", testNOP),
-        ("LDA Immediate", testLDAImmediate),
-        ("LDA Zero Page", testLDAZeroPage),
-        ("ADC with Carry", testADCWithCarry),
-        ("Stack Operations", testStackPushPull),
-        ("Multiplication Program", testMultiplicationProgram),
-        ("PPU Regs", testPPURegisters),
-        ("PPU Latch", testPPUAddressLatch),
-        ("PPU Scroll", testPPUScrollRegisters),
-        ("PPU Vblank", testPPUVBlank),
-        ("PPU Frame Complete", testPPUFrameComplete),
-        ("PPU Palette Memory", testPPUPaletteMemory),
-        ("PPU Framebuffer", testPPUFramebuffer),
-        
-        ("Sprite OAM", testSpriteOAM),
-        ("Sprite DMA", testSpriteDMA),
-        ("Sprite Rendering", testSpriteRendering),
-        ("Sprite Zero Hit", testSpriteZeroHit),
-        
-        ("Controller Basics",testControllerBasics),
-        ("Controller Strobe",testControllerStrobe),
-        ("Controller Sequence",testControllerSequence),
-        ("Mario Tests",runMarioAndEvaluationTests),
-        
-//        ("Visual Multiplication", testMultiplicationProgramVisual)
-    ]
-    
-    for (name, test) in tests {
-        print("Running \(name)...")
-        test() 
-        passed += 1
-    }
-    
-    print("\n=============================")
-    print("Tests Passed: \(passed)")
-    print("Tests Failed: \(failed)")
-    print("=============================\n")
-}
-
 func testMultiplicationProgramVisual() {
     print("=== Testing 10 × 3 Multiplication (Visual) ===")
     let test = EmulatorTest()
@@ -1568,4 +1520,51 @@ func runMarioAndEvaluationTests() {
     print("========================================")
     print("All Mario and Evaluation tests completed! 🍄")
     print("========================================\n")
+}
+
+func runAllTests() {
+    print("Starting 6502 Emulator Tests\n")
+    
+    var passed = 0
+    var failed = 0
+    
+    runPPUTests()
+    let tests = [
+        ("NOP", testNOP),
+        ("LDA Immediate", testLDAImmediate),
+        ("LDA Zero Page", testLDAZeroPage),
+        ("ADC with Carry", testADCWithCarry),
+        ("Stack Operations", testStackPushPull),
+        ("Multiplication Program", testMultiplicationProgram),
+        ("PPU Regs", testPPURegisters),
+        ("PPU Latch", testPPUAddressLatch),
+        ("PPU Scroll", testPPUScrollRegisters),
+        ("PPU Vblank", testPPUVBlank),
+        ("PPU Frame Complete", testPPUFrameComplete),
+        ("PPU Palette Memory", testPPUPaletteMemory),
+        ("PPU Framebuffer", testPPUFramebuffer),
+        
+        ("Sprite OAM", testSpriteOAM),
+        ("Sprite DMA", testSpriteDMA),
+        ("Sprite Rendering", testSpriteRendering),
+        ("Sprite Zero Hit", testSpriteZeroHit),
+        
+        ("Controller Basics",testControllerBasics),
+        ("Controller Strobe",testControllerStrobe),
+        ("Controller Sequence",testControllerSequence),
+        ("Mario Tests",runMarioAndEvaluationTests),
+        
+//        ("Visual Multiplication", testMultiplicationProgramVisual)
+    ]
+    
+    for (name, test) in tests {
+        print("Running \(name)...")
+        test()
+        passed += 1
+    }
+    
+    print("\n=============================")
+    print("Tests Passed: \(passed)")
+    print("Tests Failed: \(failed)")
+    print("=============================\n")
 }

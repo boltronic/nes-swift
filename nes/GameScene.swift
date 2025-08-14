@@ -42,9 +42,6 @@ class GameScene: SKScene {
             print("GameScene: Requested first responder")
         }
         
-        // Test pattern - gradient
-//        testPattern()
-//        updateScreen()
     }
     
     override var acceptsFirstResponder: Bool {
@@ -65,10 +62,10 @@ class GameScene: SKScene {
         
         let controller = emulator.controller1
         
-        // Debug: Print key events
+        #if DEBUG_GRANULAR
         print("Key \(isPressed ? "DOWN" : "UP"): \(event.charactersIgnoringModifiers ?? "?")")
+        #endif
         
-        // Map keyboard to NES buttons
         // Map keyboard to NES buttons
         switch event.charactersIgnoringModifiers?.lowercased() {
         case "w":
@@ -124,8 +121,10 @@ class GameScene: SKScene {
             return
         }
         
+        #if DEBUG_GRANULAR
         // Always print current button state after any change
         print("Controller buttons: \(String(format: "%02X", controller.buttons.rawValue))")
+        #endif
     }
 
     func testPattern() {
@@ -148,7 +147,6 @@ class GameScene: SKScene {
     }
     
     func updateScreen() {
-        // Convert UInt32 buffer to raw bytes for the texture
         pixelBuffer.withUnsafeBytes { ptr in
             screenTexture.modifyPixelData { pixelData, lengthInBytes in
                 memcpy(pixelData, ptr.baseAddress, lengthInBytes)

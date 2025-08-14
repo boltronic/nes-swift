@@ -86,9 +86,8 @@ struct PaletteViewer: View {
                 paletteData: paletteData
             )
         }
-        .padding()
+//        .padding(.trailing, 8)
         .background(Color(NSColor.controlBackgroundColor))
-        .cornerRadius(8)
     }
 }
 
@@ -226,7 +225,7 @@ struct PatternTableViewer: View {
                     if let image = patternTable0 {
                         Image(nsImage: image)
                             .interpolation(.none)  // Pixel-perfect scaling
-                            .frame(width: 256, height: 128)
+                            .frame(width: 128, height: 128)
                     } else {
                         Rectangle()
                             .fill(Color.black)
@@ -271,31 +270,27 @@ struct PatternTableViewer: View {
 struct PPUDebugViewer: View {
     @ObservedObject var ppuDebugState: PPUDebugState
     @State private var selectedPalette = 0
-    
+
     var body: some View {
-        VStack(spacing: 16) {
-            HStack(alignment: .top, spacing: 16) {
-                // Palette viewer on the left
-                PaletteViewer(
-                    paletteData: ppuDebugState.paletteData,
-                    selectedPalette: $selectedPalette
-                )
-                .frame(width: 300)
-                
-                // Pattern tables on the right
-                PatternTableViewer(
-                    patternTable0: ppuDebugState.patternTable0Image,
-                    patternTable1: ppuDebugState.patternTable1Image,
-                    selectedPalette: selectedPalette
-                )
-            }
+        HStack(alignment: .top, spacing: 16) {
+            PaletteViewer(
+                paletteData: ppuDebugState.paletteData,
+                selectedPalette: $selectedPalette
+            )
+            .frame(maxWidth: .infinity, alignment: .leading) // Allow it to expand
+            
+            PatternTableViewer(
+                patternTable0: ppuDebugState.patternTable0Image,
+                patternTable1: ppuDebugState.patternTable1Image,
+                selectedPalette: selectedPalette
+            )
+            .frame(maxWidth: .infinity, alignment: .leading) // Allow it to expand
         }
-        .onAppear {
+        .onChange(of: selectedPalette) {
             ppuDebugState.updatePatternTables(selectedPalette: selectedPalette)
         }
-        .onChange(of: selectedPalette) { newPalette in
-            ppuDebugState.updatePatternTables(selectedPalette: newPalette)
-        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding()
     }
 }
 
@@ -425,7 +420,6 @@ class PPUDebugState: ObservableObject {
     }
 }
 
-// Also add this debug method to help troubleshoot:
 extension PPUDebugState {
     func debugPatternTableData() {
         guard let bus = bus else {

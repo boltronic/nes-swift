@@ -29,6 +29,8 @@ struct NESPalette {
     
     // Convert palette index (0-63) to RGBA color
     static func getColor(_ index: UInt8) -> UInt32 {
-        return colors[Int(index & 0x3F)]  // Mask to 6 bits for safety
+        let rgba = colors[Int(index & 0x3F)]
+        // Convert RGBA to BGRA for SpriteKit
+        return (rgba & 0xFF00FF00) | ((rgba & 0x00FF0000) >> 16) | ((rgba & 0x000000FF) << 16)
     }
 }

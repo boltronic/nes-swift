@@ -150,15 +150,6 @@ class OLC2C02 {
     internal var spriteZeroHitPossible = false
     private var spriteZeroBeingRendered = false
     
-    func writeOAM(addr: UInt8, data: UInt8) {
-        oam[Int(addr)] = data
-        #if DEBUG_GRANULAR
-        if addr < 4 {
-            print("writeOAM[\(addr)] = \(String(format: "%02X", data))")
-        }
-        #endif
-    }
-    
     // MARK: - Debug Visualization
     private var patternTableDebug: [[UInt32]] = [
         Array(repeating: 0xFF000000, count: 128 * 128),  // Pattern table 0
@@ -177,8 +168,52 @@ class OLC2C02 {
     
     var testPatternTable: [UInt8]? = nil
     
+    // MARK: - Write Helpers
+    private func writePatternTable(address: UInt16, data: UInt8) {
+        // Test pattern table takes priority
+        if testPatternTable != nil {
+            testPatternTable![Int(address)] = data
+            return
+        }
+        
+        // Write to internal storage
+        let tableIndex = Int((address & 0x1000) >> 12)
+        let patternAddr = Int(address & 0x0FFF)
+        
+        // Swift-safe array access
+        guard tableIndex < internalPatternTables.count,
+              patternAddr < internalPatternTables[tableIndex].count else {
+            return
+        }
+        
+        internalPatternTables[tableIndex][patternAddr] = data
+    }
     
-    // MARK: - Background Rendering Helpers
+    func writeOAM(addr: UInt8, data: UInt8) {
+        oam[Int(addr)] = data
+        #if DEBUG_GRANULAR
+        if addr < 4 {
+            print("writeOAM[\(addr)] = \(String(format: "%02X", data))")
+        }
+        #endif
+    }
+    
+    private func writeNametable(address: UInt16, data: UInt8) {
+        let addr = address & 0x0FFF
+        let mirrorMode = cart?.getMirrorMode() ?? .vertical
+        
+        let (tableIndex, offset) = calculateNametableMapping(addr: addr, mirror: mirrorMode)
+        
+        // Safe array access - bounds are guaranteed by nametable design
+        tblName[tableIndex][offset] = data
+    }
+    
+    private func writePalette(address: UInt16, data: UInt8) {
+        let paletteAddr = mirrorPaletteAddress(address & 0x001F)
+        tblPalette[Int(paletteAddr)] = data & 0x3F
+    }
+    
+    // MARK: - Sprite Rendering Helpers
     private func fetchSpritePatterns() {
         for i in 0..<spriteCount {
             let sprite = spriteScanline[i]
@@ -199,7 +234,32 @@ class OLC2C02 {
                 
                 spritePatternAddrLo = patternTable | (UInt16(sprite.id) << 4) | row
             } else {
-                // 8x16 sprites - TODO: implement later
+                // 8x16 sprites 
+                var row = (scanline + 1) - UInt16(sprite.y)
+                            
+                // For 8x16 sprites, bit 0 of sprite ID selects pattern table
+                let patternTable: UInt16 = (sprite.id & 0x01) != 0 ? 0x1000 : 0x0000
+                
+                // Bits 7-1 of sprite ID form the tile number
+                let tileNumber = sprite.id & 0xFE
+                
+                var topTile: Bool
+                
+                if sprite.flipV {
+                    // When vertically flipped, we need to flip which tile we're in
+                    // and flip the row within that tile
+                    row = 15 &- row
+                    topTile = row < 8
+                    row = row & 7  // Get row within the 8x8 tile
+                } else {
+                    topTile = row < 8
+                    row = row & 7  // Get row within the 8x8 tile
+                }
+                
+                // Select top or bottom tile
+                let actualTileId = topTile ? tileNumber : (tileNumber | 0x01)
+                
+                spritePatternAddrLo = patternTable | (UInt16(actualTileId) << 4) | row
             }
             
             spritePatternAddrHi = spritePatternAddrLo &+ 8
@@ -237,6 +297,7 @@ class OLC2C02 {
         return b
     }
     
+    // MARK: - Shifter Helper Functions
     private func updateShifters() {
         if mask.contains(.showBackground) {
             // Shift the pattern shifters left by 1
@@ -257,21 +318,38 @@ class OLC2C02 {
         let attrib = bg_next_tile_attrib & 0x03  // 2-bit palette selection
         
         // Expand 2-bit palette to 8 bits (each bit becomes 0x00 or 0xFF)
-        let attribBit0 = (attrib & 0x01) != 0 ? UInt16(0xFF) : UInt16(0x00)
-        let attribBit1 = (attrib & 0x02) != 0 ? UInt16(0xFF) : UInt16(0x00)
-        
+        let attribBit0 = (attrib & 0x01) != 0 ? UInt16(0x00FF) : UInt16(0x0000)
+        let attribBit1 = (attrib & 0x02) != 0 ? UInt16(0x00FF) : UInt16(0x0000)
+
         bg_shifter_attribute_lo = (bg_shifter_attribute_lo & 0xFF00) | attribBit0
         bg_shifter_attribute_hi = (bg_shifter_attribute_hi & 0xFF00) | attribBit1
     }
     
-    private func fetchNametableByte() -> UInt8 {
-        // Fetch tile ID from nametable
-        let addr = 0x2000 | (vramAddrReg.reg & 0x0FFF)
-        return ppuRead(addr)
+    private func calculateNametableMapping(addr: UInt16, mirror: Cartridge.Mirror) -> (table: Int, offset: Int) {
+        let offset = Int(addr & 0x03FF)
+        
+        let table: Int
+        switch (addr, mirror) {
+        case (0x0000...0x03FF, _):
+            table = 0
+        case (0x0400...0x07FF, .vertical), (0x0800...0x0BFF, .vertical):
+            table = 1
+        case (0x0400...0x07FF, .horizontal):
+            table = 0
+        case (0x0800...0x0BFF, .horizontal), (0x0C00...0x0FFF, _):
+            table = 1
+        case (_, .oneScreenLo):
+            table = 0
+        case (_, .oneScreenHi):
+            table = 1
+        default:
+            table = 0
+        }
+        
+        return (table, offset)
     }
     
     private func fetchAttributeByte() -> UInt8 {
-        // IMPROVEMENT: Cleaner attribute calculation with explicit UInt16 conversions
         let addr = 0x23C0
         | (vramAddrReg.nametableY ? 0x800 : 0x000)  // Bit 11
         | (vramAddrReg.nametableX ? 0x400 : 0x000)  // Bit 10
@@ -292,6 +370,7 @@ class OLC2C02 {
         }
     }
     
+    // MARK: - Pattern Table Helpers
     private func fetchPatternTableLow() -> UInt8 {
         // Fetch the low byte of the tile pattern
         let patternTable: UInt16 = control.contains(.backgroundPatternTable) ? 0x1000 : 0x0000
@@ -313,8 +392,14 @@ class OLC2C02 {
         return ppuRead(addr)
     }
     
+    private func fetchNametableByte() -> UInt8 {
+        // Fetch tile ID from nametable
+        let addr = 0x2000 | (vramAddrReg.reg & 0x0FFF)
+        return ppuRead(addr)
+    }
+    
+    // MARK: - Scrolling Helpers
     private func incrementScrollX() {
-        // IMPROVEMENT: Add rendering condition check for better accuracy
         if (mask.contains(.showBackground) || mask.contains(.showSprites)) &&
             (scanline < 240 || scanline == 261) {  // Only during rendering scanlines
             if vramAddrReg.coarseX == 31 {
@@ -327,7 +412,6 @@ class OLC2C02 {
     }
     
     private func incrementScrollY() {
-        // IMPROVEMENT: Add rendering condition check for better accuracy
         if (mask.contains(.showBackground) || mask.contains(.showSprites)) &&
             (scanline < 240 || scanline == 261) {  // Only during rendering scanlines
             if vramAddrReg.fineY < 7 {
@@ -364,18 +448,67 @@ class OLC2C02 {
         }
     }
     
+    
+    
+    // MARK: - Mirroring Helpers
+    private func getMirroredNametableIndex(addr: UInt16) -> (table: Int, offset: Int) {
+        let addr = addr & 0x0FFF
+        let offset = Int(addr & 0x03FF)
+        
+        guard let mirrorMode = cart?.getMirrorMode() else {
+            // Default to vertical if no cart
+            return ((addr & 0x0400) != 0 ? 1 : 0, offset)
+        }
+        let table: Int
+        switch mirrorMode {
+        case .vertical:
+            // Vertical: A B
+            //          A B
+            table = (addr & 0x0400) != 0 ? 1 : 0
+        case .horizontal:
+            // Horizontal: A A
+            //            B B
+            // DEBUG: - idk about this one
+            table = Int((addr & 0x0800) >> 11)
+        case .oneScreenLo:
+            // All nametables map to first table
+            table = 0
+        case .oneScreenHi:
+            // All nametables map to second table
+            table = 1
+        }
+        return (table, offset)
+    }
+    
+    private func mirrorPaletteAddress(_ addr: UInt16) -> UInt16 {
+        switch addr {
+        case 0x0010: return 0x0000
+        case 0x0014: return 0x0004
+        case 0x0018: return 0x0008
+        case 0x001C: return 0x000C
+        default: return addr
+        }
+    }
+    
+    // MARK: - External Connections
+    func connectBus(_ bus: SystemBus) {
+        self.bus = bus
+    }
+    
+    func connectCartridge(_ cartridge: Cartridge) {
+        self.cart = cartridge
+    }
+    
+    //MARK: - Core Functions
     private func renderPixel() {
         guard mask.contains(.showBackground) || mask.contains(.showSprites) else { return }
         
         let x = Int(cycle - 1)
         let y = Int(scanline)
         
-        
         // Get background pixel
         var bgPixel: UInt8 = 0
         var bgPalette: UInt8 = 0
-        
-        
         
         if mask.contains(.showBackground) {
             // Check if we should show background on left edge
@@ -385,6 +518,8 @@ class OLC2C02 {
                 let p0 = (bg_shifter_pattern_lo & bitMux) != 0 ? 1 : 0
                 let p1 = (bg_shifter_pattern_hi & bitMux) != 0 ? 1 : 0
                 bgPixel = UInt8((p1 << 1) | p0)
+                
+                //bgPixel = UInt8((p0 << 1) | p1)
                 
                 let pal0 = (bg_shifter_attribute_lo & bitMux) != 0 ? 1 : 0
                 let pal1 = (bg_shifter_attribute_hi & bitMux) != 0 ? 1 : 0
@@ -414,7 +549,6 @@ class OLC2C02 {
         }
         #endif
 
-        
         if mask.contains(.showSprites) {
             spriteZeroBeingRendered = false
             
@@ -479,10 +613,10 @@ class OLC2C02 {
                 let spritesVisible = mask.contains(.showSprites) &&
                 (mask.contains(.showSpritesLeft) || x >= 8)
                 if bgVisible && spritesVisible && !status.contains(.spriteZeroHit) {
+                    status.insert(.spriteZeroHit)
                     #if DEBUG_GRANULAR
                     print("Sprite 0 Hit SET at X=\(x), Y=\(y), scanline=\(scanline), cycle=\(cycle)")
                     #endif
-                    status.insert(.spriteZeroHit)
                 }
             }
         }
@@ -491,7 +625,21 @@ class OLC2C02 {
         if y == 25 && x >= 88 && x < 96 {
             print("At Sprite 0 area: x=\(x), y=\(y), bgPixel=\(bgPixel), spritePixel=\(spritePixel)")
         }
-
+        #endif
+        
+        // Get final color
+        var paletteAddr: UInt16 = 0x3F00
+        if finalPixel == 0 {
+            paletteAddr = 0x3F00  // Universal backdrop
+        } else if finalPalette >= 4 {  // Sprite palettes are 4-7
+            paletteAddr = 0x3F10 + (UInt16(finalPalette - 4) << 2) + UInt16(finalPixel)
+        } else {  // Background palettes are 0-3
+            paletteAddr = 0x3F00 + (UInt16(finalPalette) << 2) + UInt16(finalPixel)
+        }
+        
+        let paletteIndex = ppuRead(paletteAddr)
+        
+        #if DEBUG_GRANULAR
         if x == 50 && y == 50 {
             // Background nametable lookup
             let tileX = x / 8
@@ -506,71 +654,56 @@ class OLC2C02 {
             print("  Sprite0: OAM[0]=\(oam[0]) OAM[1]=\(oam[1]) OAM[2]=\(oam[2]) OAM[3]=\(oam[3]), spritePixel=\(spritePixel), spriteZeroBeingRendered=\(spriteZeroBeingRendered)")
             print("  mask=\(mask), control=\(control)")
             print("  spriteZeroHitPossible=\(spriteZeroHitPossible), status=\(status)")
-        }
-        #endif
-        
-        // Get final color
-        var paletteAddr: UInt16 = 0x3F00
-        if finalPixel == 0 {
-            paletteAddr = 0x3F00  // Universal backdrop
-        } else {
-            // Check if the final pixel came from a sprite or background
-            if spritePixel != 0 && (bgPixel == 0 || !spritePriority) {
-                // Final pixel is from sprite - use sprite palette base (0x3F10)
-                paletteAddr = 0x3F10 + (UInt16(finalPalette) << 2) + UInt16(finalPixel)
-            } else {
-                // Final pixel is from background - use background palette base (0x3F00)
-                paletteAddr = 0x3F00 + (UInt16(finalPalette) << 2) + UInt16(finalPixel)
+            
+            print("  pattern_lo_shifter=\(String(format: "%04X", bg_shifter_pattern_lo))")
+            print("  pattern_hi_shifter=\(String(format: "%04X", bg_shifter_pattern_hi))")
+            print("  attribute_lo_shifter=\(String(format: "%04X", bg_shifter_attribute_lo))")
+            print("  attribute_hi_shifter=\(String(format: "%04X", bg_shifter_attribute_hi))")
+            
+            print("  bgPalette=\(bgPalette), fineX=\(fineX)")
+            print("  finalPixel=\(finalPixel), finalPalette=\(finalPalette)")
+            print("  paletteAddr=\(String(format: "%04X", paletteAddr))")
+            print("  paletteIndex=\(String(format: "%02X", paletteIndex))")
+            print("  RGB=\(String(format: "%08X", NESPalette.getColor(paletteIndex)))")
+            
+            let bitMux: UInt16 = 0x8000 >> fineX
+            print("  bitMux=\(String(format: "%04X", bitMux))")
+            
+            // Show palette memory contents
+            print("  Background palettes:")
+            for i in 0..<16 {
+                print("    [\(String(format: "%02X", i))]=\(String(format: "%02X", tblPalette[i]))")
             }
         }
         
-        let paletteIndex = ppuRead(paletteAddr)
+        if x == 100 && y == 100 {
+            print("Pink background at (100,100):")
+            print("  bgPixel=\(bgPixel), bgPalette=\(bgPalette)")
+            print("  finalPixel=\(finalPixel), finalPalette=\(finalPalette)")
+            print("  paletteAddr=\(String(format: "%04X", paletteAddr))")
+            print("  paletteIndex=\(String(format: "%02X", paletteIndex))")
+            print("  RGB=\(String(format: "%08X", NESPalette.getColor(paletteIndex)))")
+
+            let fbIndex = y * 256 + x
+            print("Framebuffer[\(fbIndex)] = \(String(format: "%08X", framebuffer[fbIndex]))")
+
+        }
         
+        if x == 50 && y == 220 {
+            print("Blue ground at (50,220):")
+            print("  bgPixel=\(bgPixel), bgPalette=\(bgPalette)")
+            print("  finalPixel=\(finalPixel), finalPalette=\(finalPalette)")
+            print("  paletteAddr=\(String(format: "%04X", paletteAddr))")
+            print("  paletteIndex=\(String(format: "%02X", paletteIndex))")
+        }
+        #endif
+
         // Store RGB value
         if x < 256 && y < 240 {
             framebuffer[y * 256 + x] = NESPalette.getColor(paletteIndex)
         }
     }
     
-    // MARK: - Mirroring Helpers
-    private func getMirroredNametableIndex(addr: UInt16) -> (table: Int, offset: Int) {
-        let addr = addr & 0x0FFF
-        let offset = Int(addr & 0x03FF)
-        
-        guard let mirrorMode = cart?.getMirrorMode() else {
-            // Default to vertical if no cart
-            return ((addr & 0x0400) != 0 ? 1 : 0, offset)
-        }
-        let table: Int
-        switch mirrorMode {
-        case .vertical:
-            // Vertical: A B
-            //          A B
-            table = (addr & 0x0400) != 0 ? 1 : 0
-        case .horizontal:
-            // Horizontal: A A
-            //            B B
-            table = (addr & 0x0800) != 0 ? 1 : 0
-        case .oneScreenLo:
-            // All nametables map to first table
-            table = 0
-        case .oneScreenHi:
-            // All nametables map to second table
-            table = 1
-        }
-        return (table, offset)
-    }
-    
-    // MARK: - External Connections
-    func connectBus(_ bus: SystemBus) {
-        self.bus = bus
-    }
-    
-    func connectCartridge(_ cartridge: Cartridge) {
-        self.cart = cartridge
-    }
-    
-    //MARK: - Core Operations
     func clock() {
         // Background rendering happens on visible scanlines
         if scanline < 240 {  // Visible scanlines 0-239
@@ -615,16 +748,17 @@ class OLC2C02 {
                 print("OAM[0]: Y=\(oam[0]), Tile=\(oam[1]), Attr=\(oam[2]), X=\(oam[3])")
                 print("Looking for sprites on scanline \(scanline)")
                 #endif
+                
                 // Sprite evaluation happens here
                 spriteScanline = []
                 spriteCount = 0
                 spriteZeroHitPossible = false
                 
-                // Evaluate which sprites are visible on the CURRENT scanline (not next)
+                // Evaluate which sprites are visible on the CURRENT scanline
                 for n in 0..<64 {
                     let spriteY = oam[n * 4]
                     let spriteHeight: Int = control.contains(.spriteSize) ? 16 : 8
-                    let diff = Int(scanline) - Int(spriteY)  // Changed: use current scanline
+                    let diff = Int(scanline) - Int(spriteY)
                                         
                     if diff >= 0 && diff < spriteHeight && spriteCount < 8 {
                         let entry = OAMEntry(
@@ -703,10 +837,8 @@ class OLC2C02 {
                 scanline = 0
                 frameComplete = true
                 frameCount += 1
-                //                print("PPU: Frame \(frameCount) complete")
             }
         }
-        
     }
     
     func reset() {
@@ -787,13 +919,11 @@ class OLC2C02 {
             break
         case 0x0002: // Status
             // Reading status has side effects
-            //            print("Reading PPU status: raw=\(String(format: "%02X", status.rawValue)), vblank=\(status.contains(.verticalBlank))")
             data = (status.rawValue & 0xE0) | (ppuDataBuffer & 0x1F)
             if !readOnly {
                 status.remove(.verticalBlank)
                 addressLatch = 0
             }
-            //            print("Returning status: \(String(format: "%02X", data))")
         case 0x0003: // OAM Address
             // Write-only
             break
@@ -920,88 +1050,12 @@ class OLC2C02 {
         switch address {
         case 0x0000...0x1FFF:
             writePatternTable(address: address, data: data)
-            
         case 0x2000...0x3EFF:
             writeNametable(address: address, data: data)
-            
         case 0x3F00...0x3FFF:
             writePalette(address: address, data: data)
-            
         default:
             break
-        }
-    }
-    
-    // MARK: - Write Helpers
-    
-    private func writePatternTable(address: UInt16, data: UInt8) {
-        // Test pattern table takes priority
-        if testPatternTable != nil {
-            testPatternTable![Int(address)] = data
-            return
-        }
-        
-        // Write to internal storage
-        let tableIndex = Int((address & 0x1000) >> 12)
-        let patternAddr = Int(address & 0x0FFF)
-        
-        // Swift-safe array access
-        guard tableIndex < internalPatternTables.count,
-              patternAddr < internalPatternTables[tableIndex].count else {
-            return
-        }
-        
-        internalPatternTables[tableIndex][patternAddr] = data
-    }
-    
-    private func writeNametable(address: UInt16, data: UInt8) {
-        let addr = address & 0x0FFF
-        let mirrorMode = cart?.getMirrorMode() ?? .vertical
-        
-        let (tableIndex, offset) = calculateNametableMapping(addr: addr, mirror: mirrorMode)
-        
-        // Safe array access - bounds are guaranteed by nametable design
-        tblName[tableIndex][offset] = data
-    }
-    
-    private func writePalette(address: UInt16, data: UInt8) {
-        let paletteAddr = mirrorPaletteAddress(address & 0x001F)
-        tblPalette[Int(paletteAddr)] = data & 0x3F
-    }
-    
-    // MARK: - Helper Functions
-    
-    private func calculateNametableMapping(addr: UInt16, mirror: Cartridge.Mirror) -> (table: Int, offset: Int) {
-        let offset = Int(addr & 0x03FF)
-        
-        let table: Int
-        switch (addr, mirror) {
-        case (0x0000...0x03FF, _):
-            table = 0
-        case (0x0400...0x07FF, .vertical), (0x0800...0x0BFF, .vertical):
-            table = 1
-        case (0x0400...0x07FF, .horizontal):
-            table = 0
-        case (0x0800...0x0BFF, .horizontal), (0x0C00...0x0FFF, _):
-            table = 1
-        case (_, .oneScreenLo):
-            table = 0
-        case (_, .oneScreenHi):
-            table = 1
-        default:
-            table = 0
-        }
-        
-        return (table, offset)
-    }
-    
-    private func mirrorPaletteAddress(_ addr: UInt16) -> UInt16 {
-        switch addr {
-        case 0x0010: return 0x0000
-        case 0x0014: return 0x0004
-        case 0x0018: return 0x0008
-        case 0x001C: return 0x000C
-        default: return addr
         }
     }
 }

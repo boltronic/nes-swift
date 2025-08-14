@@ -71,15 +71,44 @@ struct ContentView: View {
                 SpriteKitView(emulatorState: emulatorState)
                     .frame(minWidth: 512, minHeight: 480)
 
-                // Debug panel below the game content
+                // IMPROVED Debug panel layout - fixed heights
                 if showDebugPanel {
                     Divider()
+                    
                     HStack(spacing: 0) {
+                        // Left side - CPU state (fixed height)
                         CPUStateView(cpuState: emulatorState.cpuDebugState)
-                            .frame(width: 175, height: 400)
+                            .frame(width: 200, height: 300) // Fixed height to match
+                        
                         Divider()
-                        MemoryViewer(memoryState: emulatorState.memoryDebugState, ppuDebugState: emulatorState.ppuDebugState )
-                            .frame(maxHeight: 400)
+                        
+                        // Center - Main memory viewer (gets most space, fixed height)
+                        MemoryViewer(
+                            memoryState: emulatorState.memoryDebugState,
+                            ppuDebugState: emulatorState.ppuDebugState
+                        )
+                        .frame(minWidth: 600)
+                        
+                        Divider()
+                        
+                        // Right side - Stack (fixed height)
+                        VStack(spacing: 0) {
+                            Text("Stack")
+                                .font(.headline)
+                                .padding(.top, 8)
+                            
+                            Divider()
+                            
+                            ScrollView {
+                                StackView(
+                                    stackData: emulatorState.memoryDebugState.stackData,
+                                    stackPointer: emulatorState.memoryDebugState.stackPointer
+                                )
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                        .frame(width: 150, height: 300) // Fixed height
+                        .background(Color(NSColor.controlBackgroundColor))
                     }
                     .background(Color(NSColor.controlBackgroundColor))
                 }
@@ -217,7 +246,7 @@ class EmulatorState: ObservableObject {
         bus.ppu.frameComplete = false
         frameCount += 1
         
-        // Update debug info periodically (not every frame for performance)
+        // MARK: - Debug Update Frequency
         if frameCount % 10 == 0 {
             DispatchQueue.main.async { [weak self] in
                 self?.updateDebugInfo()

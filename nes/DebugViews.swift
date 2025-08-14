@@ -245,91 +245,85 @@ struct MemoryViewer: View {
     @State private var addressInput = ""
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Memory")
-                    .font(.headline)
+        VStack(spacing: 0) {
+            // Compact header with tabs and controls in one row
+            HStack(spacing: 8) {
+                // Memory type picker
+                Picker("", selection: $selectedTab) {
+                    Text("RAM").tag(0)
+                    Text("Palette").tag(1)
+                }
+                .pickerStyle(SegmentedPickerStyle())
+                .frame(width: 280)
+                
+                // Quick jump buttons (only for RAM view)
+                if selectedTab == 0 {
+                    Button("Zero") { jumpToAddress(0x0000) }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                    Button("Stack") { jumpToAddress(0x0100) }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                    Button("PPU") { jumpToAddress(0x2000) }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                    Button("ROM") { jumpToAddress(0x8000) }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                }
                 
                 Spacer()
                 
-                Picker("", selection: $selectedTab) {
-                    Text("RAM").tag(0)
-                    Text("Stack").tag(1)
-                    Text("Zero Page").tag(2)
-                    Text("Palette").tag(3)
-                }
-                .pickerStyle(SegmentedPickerStyle())
-                .frame(width: 300)  // Make wider to fit new tab
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 2)
-            
-            Divider()
-            
-            // Address navigation - Hide for palette tab
-            if selectedTab != 3 {
-                HStack {
-                    Text("Address:")
-                    TextField("0000", text: $addressInput)
-                        .frame(width: 60)
+                // Address input (only for RAM view)
+                if selectedTab == 0 {
+                    Text("Go to:")
+                        .font(.caption)
+                    TextField("2000", text: $addressInput)
+                        .frame(width: 50)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
-                        .onSubmit {
-                            if let addr = UInt16(addressInput, radix: 16) {
-                                memoryState.viewAddress = addr
-                            }
-                        }
+                        .font(.system(.caption, design: .monospaced))
+                        .onSubmit { jumpToInputAddress() }
                     
-                    Button("Go") {
-                        if let addr = UInt16(addressInput, radix: 16) {
-                            memoryState.viewAddress = addr
-                        }
-                    }
-                    
-                    Spacer()
-                    
-                    // Quick jumps
-                    Button("0000") {
-                        memoryState.viewAddress = 0x0000
-                        addressInput = "0000"
-                    }
-                    Button("0100") {
-                        memoryState.viewAddress = 0x0100
-                        addressInput = "0100"
-                    }
-                    Button("8000") {
-                        memoryState.viewAddress = 0x8000
-                        addressInput = "8000"
-                    }
+                    Button("Go") { jumpToInputAddress() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
                 }
-                .padding(.horizontal)
-                .padding(.vertical, 4)
-                
-                Divider()
             }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(Color.secondary.opacity(0.1))
             
-            ScrollView {
-                if selectedTab == 1 {
-                    StackView(
-                        stackData: memoryState.stackData,
-                        stackPointer: memoryState.stackPointer
-                    )
-                } else if selectedTab == 3 {
-                    // NEW: Palette viewer tab
-                    PPUDebugViewer(ppuDebugState: ppuDebugState)
-                        .padding()
-                } else {
+            // Main content area
+            ScrollView([.vertical]) {
+                switch selectedTab {
+                case 0:
+                    // RAM view
                     MemoryHexView(
-                        baseAddress: selectedTab == 2 ? 0x0000 : memoryState.viewAddress,
-                        data: selectedTab == 2
-                            ? Array(memoryState.memoryData.prefix(256))
-                            : memoryState.memoryData,
-                        changedAddresses: memoryState.changedAddresses
+                        baseAddress: memoryState.viewAddress,
+                        data: memoryState.memoryData,
+                        changedAddresses: memoryState.changedAddresses,
+                        rowsToShow: 20
                     )
+                case 1:
+                    // Palette view
+                    PPUDebugViewer(ppuDebugState: ppuDebugState)
+                default:
+                    EmptyView()
                 }
             }
-            .frame(maxHeight: .infinity)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(Color(NSColor.controlBackgroundColor))
+    }
+    
+    private func jumpToAddress(_ address: UInt16) {
+        memoryState.viewAddress = address
+        addressInput = String(format: "%04X", address)
+    }
+    
+    private func jumpToInputAddress() {
+        if let addr = UInt16(addressInput, radix: 16) {
+            memoryState.viewAddress = addr
+        }
     }
 }
 
@@ -337,83 +331,101 @@ struct MemoryHexView: View {
     let baseAddress: UInt16
     let data: [UInt8]
     let changedAddresses: Set<UInt16>
+    let rowsToShow: Int
     
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Header row
             HStack(spacing: 0) {
-                Text("      ")
+                Text("Address")
                     .font(.system(.caption, design: .monospaced))
-                    .frame(width: 50)
+                    .frame(width: 60, alignment: .leading)
                 
-                ForEach(0..<16) { col in
-                    Text(String(format: "%02X", col))
+                ForEach(0..<16, id: \.self) { col in
+                    Text(String(format: "%X", col))
                         .font(.system(.caption, design: .monospaced))
                         .frame(width: 24)
                         .foregroundColor(.secondary)
                 }
                 
-                Text("  ASCII")
+                Text("ASCII")
                     .font(.system(.caption, design: .monospaced))
+                    .frame(width: 140, alignment: .leading)
                     .foregroundColor(.secondary)
             }
-            .padding(.horizontal)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color.secondary.opacity(0.1))
             
-            Divider()
-            
-            // Memory rows
-            ForEach(0..<min(16, (data.count + 15) / 16), id: \.self) { row in
-                HStack(spacing: 0) {
-                    // Address
-                    Text(String(format: "$%04X:", baseAddress &+ UInt16(row * 16)))
-                        .font(.system(.caption, design: .monospaced))
-                        .frame(width: 50, alignment: .leading)
-                        .foregroundColor(.secondary)
-                    
-                    // Hex values
-                    ForEach(0..<16) { col in
-                        let index = row * 16 + col
-                        if index < data.count {
-                            let address = baseAddress &+ UInt16(index)
-                            Text(String(format: "%02X", data[index]))
-                                .font(.system(.caption, design: .monospaced))
-                                .frame(width: 24)
-                                .foregroundColor(changedAddresses.contains(address) ? .red : .primary)
-                                .background(
-                                    changedAddresses.contains(address)
-                                        ? Color.red.opacity(0.2)
-                                        : Color.clear
-                                )
-                        } else {
-                            Text("  ")
-                                .frame(width: 24)
-                        }
-                    }
-                    
-                    Text("  ")
-                    
-                    // ASCII representation
-                    ForEach(0..<16) { col in
-                        let index = row * 16 + col
-                        if index < data.count {
-                            let byte = data[index]
-                            let char = (byte >= 32 && byte <= 126)
-                                ? String(Character(UnicodeScalar(byte)))
-                                : "."
-                            Text(char)
-                                .font(.system(.caption, design: .monospaced))
-                                .frame(width: 8)
-                        } else {
-                            Text(" ")
-                                .frame(width: 8)
-                        }
-                    }
-                    
-                    Spacer()
+            // Memory rows with more data
+            LazyVStack(spacing: 1) {
+                ForEach(0..<min(rowsToShow, (data.count + 15) / 16), id: \.self) { row in
+                    MemoryRow(
+                        baseAddress: baseAddress,
+                        data: data,
+                        changedAddresses: changedAddresses,
+                        row: row
+                    )
                 }
-                .padding(.horizontal)
             }
+            .padding(.horizontal, 8)
         }
+    }
+}
+
+struct MemoryRow: View {
+    let baseAddress: UInt16
+    let data: [UInt8]
+    let changedAddresses: Set<UInt16>
+    let row: Int
+    
+    var body: some View {
+        HStack(spacing: 0) {
+            // Address
+            Text(String(format: "%04X:", baseAddress &+ UInt16(row * 16)))
+                .font(.system(.caption, design: .monospaced))
+                .frame(width: 60, alignment: .leading)
+                .foregroundColor(.secondary)
+            
+            // Hex values
+            ForEach(0..<16, id: \.self) { col in
+                let index = row * 16 + col
+                if index < data.count {
+                    let address = baseAddress &+ UInt16(index)
+                    let isChanged = changedAddresses.contains(address)
+                    
+                    Text(String(format: "%02X", data[index]))
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(width: 24)
+                        .foregroundColor(isChanged ? .red : .primary)
+                        .background(isChanged ? Color.red.opacity(0.2) : Color.clear)
+                } else {
+                    Text("  ")
+                        .frame(width: 24)
+                }
+            }
+            
+            // ASCII representation
+            HStack(spacing: 0) {
+                ForEach(0..<16, id: \.self) { col in
+                    let index = row * 16 + col
+                    if index < data.count {
+                        let byte = data[index]
+                        let char = (byte >= 32 && byte <= 126) ? String(Character(UnicodeScalar(byte))) : "."
+                        Text(char)
+                            .font(.system(.caption, design: .monospaced))
+                            .frame(width: 8)
+                    } else {
+                        Text(" ")
+                            .frame(width: 8)
+                    }
+                }
+            }
+            .frame(width: 140, alignment: .leading)
+            
+            Spacer()
+        }
+        .padding(.vertical, 1)
     }
 }
 
@@ -476,3 +488,50 @@ struct StackView: View {
     }
 }
 
+struct CompactMemoryControls: View {
+    @ObservedObject var memoryState: MemoryDebugState
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Memory Info")
+                .font(.headline)
+                .padding(.horizontal, 8)
+            
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Current: $\(String(format: "%04X", memoryState.viewAddress))")
+                        .font(.system(.caption, design: .monospaced))
+                    
+                    Text("Region: \(getMemoryRegion(memoryState.viewAddress))")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Stack: $\(String(format: "%02X", memoryState.stackPointer))")
+                        .font(.system(.caption, design: .monospaced))
+                    
+                    Text("Changes: \(memoryState.changedAddresses.count)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding(.horizontal, 8)
+        }
+        .background(Color.black.opacity(0.05))
+    }
+    
+    private func getMemoryRegion(_ address: UInt16) -> String {
+        switch address {
+        case 0x0000...0x00FF: return "Zero Page"
+        case 0x0100...0x01FF: return "Stack"
+        case 0x0200...0x07FF: return "RAM"
+        case 0x2000...0x3FFF: return "PPU"
+        case 0x4000...0x401F: return "APU/IO"
+        case 0x8000...0xFFFF: return "ROM"
+        default: return "Unknown"
+        }
+    }
+}
