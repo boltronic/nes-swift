@@ -211,58 +211,242 @@ struct PatternTableViewer: View {
     let patternTable1: NSImage?  // 128x128 image of pattern table 1
     let selectedPalette: Int
     
+    private let tileSize: CGFloat = 16  // Each 8x8 tile displayed as 16x16
+    private let tableSize: CGFloat = 256  // 16 tiles * 16 pixels each
+    
+    @State private var selectedTile: TileInfo? = nil
+    
+    struct TileInfo {
+        let table: Int
+        let index: Int
+        let x: Int
+        let y: Int
+        let address: UInt16
+    }
+    
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Pattern Tables (Palette \(selectedPalette))")
-                .font(.headline)
-            
-            HStack(spacing: 16) {
-                VStack {
-                    Text("Table 0 ($0000)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    
-                    if let image = patternTable0 {
-                        Image(nsImage: image)
-                            .interpolation(.none)  // Pixel-perfect scaling
-                            .frame(width: 128, height: 128)
-                    } else {
-                        Rectangle()
-                            .fill(Color.black)
-                            .frame(width: 128, height: 128)
-                            .overlay(
-                                Text("No CHR Data")
-                                    .foregroundColor(.white)
-                                    .font(.caption)
-                            )
-                    }
-                }
+        HStack(alignment: .top, spacing: 20) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Pattern Tables (Palette \(selectedPalette))")
+                    .font(.headline)
                 
-                VStack {
-                    Text("Table 1 ($1000)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                HStack(spacing: 20) {
+                    VStack {
+                        Text("Table 0 ($0000)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        
+                        ZStack {
+                            if let image = patternTable0 {
+                                Image(nsImage: image)
+                                    .interpolation(.none)  // Pixel-perfect scaling
+                                    .resizable()  // Allow the image to be resized
+                                    .frame(width: tableSize, height: tableSize)
+                            } else {
+                                Rectangle()
+                                    .fill(Color.black)
+                                    .frame(width: tableSize, height: tableSize)
+                                    .overlay(
+                                        Text("No CHR Data")
+                                            .foregroundColor(.white)
+                                            .font(.caption)
+                                    )
+                            }
+                            
+                            // Grid overlay for tile boundaries
+                            GridOverlay(size: tableSize, tileSize: tileSize)
+                            
+                            // Selection highlight for table 0
+                            if let tile = selectedTile, tile.table == 0 {
+                                TileSelectionOverlay(
+                                    tileX: tile.x,
+                                    tileY: tile.y,
+                                    tileSize: tileSize
+                                )
+                            }
+                        }
+                        .border(Color.gray, width: 1)
+                        .onTapGesture { location in
+                            handleTileClick(location: location, table: 0)
+                        }
+                    }
                     
-                    if let image = patternTable1 {
-                        Image(nsImage: image)
-                            .interpolation(.none)
-                            .frame(width: 128, height: 128)
-                    } else {
-                        Rectangle()
-                            .fill(Color.black)
-                            .frame(width: 128, height: 128)
-                            .overlay(
-                                Text("No CHR Data")
-                                    .foregroundColor(.white)
-                                    .font(.caption)
-                            )
+                    VStack {
+                        Text("Table 1 ($1000)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        
+                        ZStack {
+                            if let image = patternTable1 {
+                                Image(nsImage: image)
+                                    .interpolation(.none)
+                                    .resizable()  // Allow the image to be resized
+                                    .frame(width: tableSize, height: tableSize)
+                            } else {
+                                Rectangle()
+                                    .fill(Color.black)
+                                    .frame(width: tableSize, height: tableSize)
+                                    .overlay(
+                                        Text("No CHR Data")
+                                            .foregroundColor(.white)
+                                            .font(.caption)
+                                    )
+                            }
+                            
+                            // Grid overlay for tile boundaries
+                            GridOverlay(size: tableSize, tileSize: tileSize)
+                            
+                            // Selection highlight for table 1
+                            if let tile = selectedTile, tile.table == 1 {
+                                TileSelectionOverlay(
+                                    tileX: tile.x,
+                                    tileY: tile.y,
+                                    tileSize: tileSize
+                                )
+                            }
+                        }
+                        .border(Color.gray, width: 1)
+                        .onTapGesture { location in
+                            handleTileClick(location: location, table: 1)
+                        }
                     }
                 }
+            }
+            
+            // Tile details panel
+            if let tile = selectedTile {
+                TileDetailPanel(tile: tile, selectedPalette: selectedPalette)
+                    .frame(width: 200)
             }
         }
         .padding()
         .background(Color(NSColor.controlBackgroundColor))
         .cornerRadius(8)
+    }
+    
+    private func handleTileClick(location: CGPoint, table: Int) {
+        let tileX = Int(location.x / tileSize)
+        let tileY = Int(location.y / tileSize)
+        
+        // Clamp to valid range
+        guard tileX >= 0 && tileX < 16 && tileY >= 0 && tileY < 16 else { return }
+        
+        let tileIndex = tileY * 16 + tileX
+        let baseAddress: UInt16 = table == 0 ? 0x0000 : 0x1000
+        let tileAddress = baseAddress + UInt16(tileIndex * 16)
+        
+        selectedTile = TileInfo(
+            table: table,
+            index: tileIndex,
+            x: tileX,
+            y: tileY,
+            address: tileAddress
+        )
+    }
+}
+
+struct GridOverlay: View {
+    let size: CGFloat
+    let tileSize: CGFloat
+    
+    var body: some View {
+        Canvas { context, canvasSize in
+            let gridColor = Color.white.opacity(0.3)
+            
+            // Vertical lines
+            for i in 1..<16 {  // 15 lines for 16 tiles
+                let x = CGFloat(i) * tileSize
+                context.stroke(
+                    Path { path in
+                        path.move(to: CGPoint(x: x, y: 0))
+                        path.addLine(to: CGPoint(x: x, y: size))
+                    },
+                    with: .color(gridColor),
+                    lineWidth: 0.5
+                )
+            }
+            
+            // Horizontal lines
+            for i in 1..<16 {  // 15 lines for 16 tiles
+                let y = CGFloat(i) * tileSize
+                context.stroke(
+                    Path { path in
+                        path.move(to: CGPoint(x: 0, y: y))
+                        path.addLine(to: CGPoint(x: size, y: y))
+                    },
+                    with: .color(gridColor),
+                    lineWidth: 0.5
+                )
+            }
+        }
+        .frame(width: size, height: size)
+        .allowsHitTesting(false)  // Let clicks pass through to the image
+    }
+}
+
+struct TileSelectionOverlay: View {
+    let tileX: Int
+    let tileY: Int
+    let tileSize: CGFloat
+    
+    var body: some View {
+        Rectangle()
+            .stroke(Color.yellow, lineWidth: 2)
+            .frame(width: tileSize, height: tileSize)
+            .position(
+                x: CGFloat(tileX) * tileSize + tileSize/2,
+                y: CGFloat(tileY) * tileSize + tileSize/2
+            )
+            .allowsHitTesting(false)
+    }
+}
+
+struct TileDetailPanel: View {
+    let tile: PatternTableViewer.TileInfo
+    let selectedPalette: Int
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Tile Details")
+                .font(.headline)
+            
+            Divider()
+            
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Table: \(tile.table)")
+                Text("Index: $\(String(format: "%02X", tile.index)) (\(tile.index))")
+                Text("Position: (\(tile.x), \(tile.y))")
+                Text("Address: $\(String(format: "%04X", tile.address))")
+                Text("Palette: \(selectedPalette)")
+            }
+            .font(.caption)
+            .foregroundColor(.secondary)
+            
+            Divider()
+            
+            Text("Pattern Data")
+                .font(.subheadline)
+                .fontWeight(.medium)
+            
+            // Placeholder for pattern data - you'll need to implement this
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Low byte:  $XX")
+                Text("High byte: $XX")
+                Text("...")
+                Text("(8 bytes each)")
+            }
+            .font(.caption)
+            .foregroundColor(.secondary)
+            
+            Spacer()
+        }
+        .padding()
+        .background(Color(NSColor.controlBackgroundColor))
+        .cornerRadius(8)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+        )
     }
 }
 

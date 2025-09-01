@@ -37,7 +37,7 @@ struct ContentView: View {
     @State private var showingRomPicker = false
     @State private var romLoaded = false
     @State private var showDebugPanel = true
-
+    
     var body: some View {
         VStack(spacing: 0) {
             // Menu bar at the top
@@ -46,59 +46,49 @@ struct ContentView: View {
                     showingRomPicker = true
                 }
                 .padding()
-
                 Button("Load Test Program") {
                     emulatorState.loadTestProgram()
                     romLoaded = true
                 }
                 .padding()
-
                 Button(emulatorState.isPaused ? "Resume" : "Pause") {
                     emulatorState.togglePause()
                 }
                 .padding()
-
+                
+                Button("Step") {
+                    emulatorState.step()
+                }
+                .padding()
                 Toggle("Show Debug", isOn: $showDebugPanel)
                     .padding()
-
                 Spacer()
             }
             .background(Color.gray.opacity(0.2))
-
-            // NES content and debug panels below the menu
-            VStack(spacing: 0) {
-                // NES game content
-                SpriteKitView(emulatorState: emulatorState)
-                    .frame(minWidth: 512, minHeight: 480)
-
-                // IMPROVED Debug panel layout - fixed heights
-                if showDebugPanel {
-                    Divider()
-                    
+            
+            if showDebugPanel {
+                VStack(spacing: 0) {
+                    // Top section - SpriteKit with CPU State and Stack on sides
                     HStack(spacing: 0) {
-                        // Left side - CPU state (fixed height)
+                        // Left side - CPU State
                         CPUStateView(cpuState: emulatorState.cpuDebugState)
-                            .frame(width: 200, height: 300) // Fixed height to match
+                            .frame(width: 200)
+                            .background(Color(NSColor.controlBackgroundColor))
                         
                         Divider()
                         
-                        // Center - Main memory viewer (gets most space, fixed height)
-                        MemoryViewer(
-                            memoryState: emulatorState.memoryDebugState,
-                            ppuDebugState: emulatorState.ppuDebugState
-                        )
-                        .frame(minWidth: 600)
+                        // Center - SpriteKit view only
+                        SpriteKitView(emulatorState: emulatorState)
+                            .frame(minWidth: 512, minHeight: 480)
                         
                         Divider()
                         
-                        // Right side - Stack (fixed height)
+                        // Right side - Stack
                         VStack(spacing: 0) {
                             Text("Stack")
                                 .font(.headline)
                                 .padding(.top, 8)
-                            
                             Divider()
-                            
                             ScrollView {
                                 StackView(
                                     stackData: emulatorState.memoryDebugState.stackData,
@@ -107,11 +97,24 @@ struct ContentView: View {
                             }
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                         }
-                        .frame(width: 150, height: 300) // Fixed height
+                        .frame(width: 150)
                         .background(Color(NSColor.controlBackgroundColor))
                     }
-                    .background(Color(NSColor.controlBackgroundColor))
+                    
+                    Divider()
+                    
+                    // Bottom section - Memory viewer spans full width
+                    DebugContainer(
+                        memoryState: emulatorState.memoryDebugState,
+                        ppuDebugState: emulatorState.ppuDebugState,
+                        mapperDebugState: emulatorState.mapperDebugState
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: 300)
                 }
+            } else {
+                // Just the SpriteKit view when debug panel is hidden
+                SpriteKitView(emulatorState: emulatorState)
+                    .frame(minWidth: 512, minHeight: 480)
             }
         }
         .fileImporter(
@@ -129,6 +132,7 @@ struct ContentView: View {
             }
         }
     }
+
     
     private func loadROM(from url: URL) {
         guard url.startAccessingSecurityScopedResource() else {
@@ -143,6 +147,53 @@ struct ContentView: View {
     }
 }
 
+struct DebugPanel: View {
+    @ObservedObject var cpuState: CPUDebugState
+    @ObservedObject var memoryState: MemoryDebugState
+    @ObservedObject var ppuDebugState: PPUDebugState
+    @ObservedObject var mapperDebugState: MapperDebugState
+
+    var body: some View {
+        HStack(spacing: 0) {
+            // Left side - CPU state
+            CPUStateView(cpuState: cpuState)
+                .frame(width: 200, height: 300)
+
+            Divider()
+
+            // Center - Memory viewer
+            DebugContainer(
+                memoryState: memoryState,
+                ppuDebugState: ppuDebugState,
+                mapperDebugState: mapperDebugState
+            )
+            .frame(minWidth: 600, maxHeight: 300)
+
+            Divider()
+
+            // Right side - Stack
+            VStack(spacing: 0) {
+                Text("Stack")
+                    .font(.headline)
+                    .padding(.top, 8)
+
+                Divider()
+
+                ScrollView {
+                    StackView(
+                        stackData: memoryState.stackData,
+                        stackPointer: memoryState.stackPointer
+                    )
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .frame(width: 150, height: 300)
+            .background(Color(NSColor.controlBackgroundColor))
+        }
+        .background(Color(NSColor.controlBackgroundColor))
+    }
+}
+
 
 class EmulatorState: ObservableObject {
     let bus = SystemBus()
@@ -154,10 +205,11 @@ class EmulatorState: ObservableObject {
     @Published var cpuDebugState = CPUDebugState()
     @Published var memoryDebugState = MemoryDebugState()
     @Published var ppuDebugState = PPUDebugState()
+    @Published var mapperDebugState = MapperDebugState()  // Add this line
     @Published var isPaused = false
     
     init() {
-        // Don't load test program by default anymore
+
     }
     
     func updateDebugInfo() {
@@ -165,11 +217,11 @@ class EmulatorState: ObservableObject {
         cpuDebugState.frameCount = frameCount
         memoryDebugState.update(from: bus)
         ppuDebugState.update(from: bus)
+        mapperDebugState.update(from: bus)
     }
     
     func step() {
         guard isPaused else { return }
-        
         // Execute one instruction
         repeat {
             bus.clock()
@@ -299,3 +351,51 @@ class EmulatorState: ObservableObject {
     }
 }
 
+struct DebugPanel_Previews: PreviewProvider {
+    static var previews: some View {
+        DebugPanel(
+            cpuState: mockCPUState,
+            memoryState: mockMemoryState,
+            ppuDebugState: mockPPUDebugState,
+            mapperDebugState: mockMapperDebugState
+        )
+        .frame(width: 1000, height: 350)
+        .previewLayout(.sizeThatFits)
+    }
+
+    static var mockCPUState: CPUDebugState {
+        let state = CPUDebugState()
+        state.pc = 0x8000
+        state.a = 0x42
+        state.x = 0x10
+        state.y = 0x20
+        state.sp = 0xFF
+        state.status = 0b10101010
+        state.currentInstruction = "$8000: A9 42"
+        state.nextInstructions = ["$8002: 8D 00 02", "$8005: EA", "$8006: 4C 00 80"]
+        state.cycleCount = 1234
+        state.frameCount = 56
+        return state
+    }
+
+    static var mockMemoryState: MemoryDebugState {
+        let state = MemoryDebugState()
+        state.memoryData = Array(repeating: 0xAA, count: 256)
+        state.stackData = Array(repeating: 0xBB, count: 256)
+        state.stackPointer = 0xF0
+        return state
+    }
+
+    static var mockPPUDebugState: PPUDebugState {
+        let state = PPUDebugState()
+        state.paletteData = Array(0..<32)
+        // You can add more mock data if your MemoryViewer/PaletteViewer needs it
+        return state
+    }
+    
+    static var mockMapperDebugState: MapperDebugState {
+        let state = MapperDebugState()
+        // TODO: - implement
+        return state
+    }
+}

@@ -36,7 +36,9 @@ class Cartridge {
     internal var prgBanks: UInt8    = 0
     internal var chrBanks: UInt8    = 0
     private var mirror: Mirror      = .horizontal
-    private var mapper: Mapper?
+    private var staticRAM: [UInt8] = Array(repeating: 0, count: 8192)
+    internal var mapper: Mapper?
+
     
     // MARK: - Initialization
     init?(fileName: String) {
@@ -93,7 +95,7 @@ class Cartridge {
             // Load CHR ROM
             chrBanks = header.chrRomChunks
             if chrBanks > 0 {
-                let chrSize = Int(chrBanks) * 8192  // 8KB per bank
+                let chrSize = Int(header.chrRomChunks) * 8192  // Still load 8KB chunks from file
                 guard data.count >= dataOffset + chrSize else { return nil }
                 chrMemory = Array(data[dataOffset..<(dataOffset + chrSize)])
                 
@@ -117,15 +119,29 @@ class Cartridge {
             
         }
         
+        chrBanks = header.chrRomChunks  
+        if chrBanks > 0 {
+            let chrSize = Int(chrBanks) * 8192  // 8KB per bank
+            guard data.count >= dataOffset + chrSize else { return nil }
+            chrMemory = Array(data[dataOffset..<(dataOffset + chrSize)])
+        } else {
+            chrMemory = Array(repeating: 0, count: 8192)
+            print("No CHR ROM - using CHR RAM")
+        }
+        
         // Create appropriate mapper
         switch mapperID {
         case 0:
             mapper = Mapper000(prgBanks: prgBanks, chrBanks: chrBanks)
+        case 1:
+            mapper = MMC1Mapper(prgBanks: prgBanks, chrBanks: chrBanks)
+        case 4:
+            let chr1kBanksForMMC3: UInt32 = (chrBanks > 0) ? UInt32(chrBanks) * 8 : 8
+            mapper = MMC3Mapper(prgBanks: prgBanks, chrBanks: UInt8(truncatingIfNeeded: chr1kBanksForMMC3))
         default:
             print("Mapper \(mapperID) not implemented")
             return nil
-        }
-        
+        }        
         imageValid = true
     }
     
@@ -133,73 +149,108 @@ class Cartridge {
     var isImageValid: Bool {
         return imageValid
     }
+
     // cpuRead/Write -- Program memory
     // ppuRead/Write -- Character memory
-    func cpuRead(address: UInt16, data: inout UInt8) -> Bool {
-        var mappedAddr: UInt32 = 0
-        if let mapper = mapper, mapper.cpuMapRead(addr: address, mappedAddr: &mappedAddr) {
-            if mappedAddr < prgMemory.count {
-                data = prgMemory[Int(mappedAddr)]
-                return true
-            }
-        }
-        return false
-    }
-    
-    func cpuWrite(address: UInt16, data: UInt8) -> Bool {
-        var mappedAddr: UInt32 = 0
-        if let mapper = mapper, mapper.cpuMapWrite(addr: address, mappedAddr: &mappedAddr) {
-            if mappedAddr < prgMemory.count {
-                prgMemory[Int(mappedAddr)] = data
-                return true
-            }
-        }
-        return false
-    }
-    
-    func ppuRead(address: UInt16, data: inout UInt8) -> Bool {
-        var mappedAddr: UInt32 = 0
+    func cpuRead(address: UInt16) -> UInt8? {
+        guard let mapper = mapper else { return nil }
+        guard let mappedAddr = mapper.cpuMapRead(address: address) else { return nil }
         
-        // Debug trace
-        let shouldDebug = address < 0x10
-        
-        if let mapper = mapper, mapper.ppuMapRead(addr: address, mappedAddr: &mappedAddr) {
-            if mappedAddr < chrMemory.count {
-                data = chrMemory[Int(mappedAddr)]
-                #if DEBUG_GRANULAR
-                if shouldDebug {
-                    print("Cartridge: Read $\(String(format: "%04X", address)) → [\(String(format: "%08X", mappedAddr))] = $\(String(format: "%02X", data))")
-                }
-                #endif
-                return true
-            } else {
-                #if DEBUG_GRANULAR
-                if shouldDebug {
-                    print("Cartridge: Read $\(String(format: "%04X", address)) → mapped address \(mappedAddr) out of bounds (CHR size: \(chrMemory.count))")
-                }
-                #endif
+        if mappedAddr == 0xFFFFFFFF {
+            // Check if mapper supports PRG-RAM
+            if let prgRAMMapper = mapper as? PRGRAMSupport {
+                return prgRAMMapper.readPRGRAM(address: address)
             }
+            return nil
         } else {
-            if shouldDebug {
-                print("Cartridge: Mapper returned false for address $\(String(format: "%04X", address))")
-            }
+            guard mappedAddr < prgMemory.count else { return nil }
+            return prgMemory[Int(mappedAddr)]
         }
-        return false
+    }
+
+    func cpuWrite(address: UInt16, data: UInt8) -> Bool {
+        guard mapper != nil else {
+            return false
+        }
+        
+        guard let mappedAddr = mapper!.cpuMapWrite(address: address, value: data) else {
+            return false
+        }
+        
+        return true
+    }
+    
+    func ppuRead(address: UInt16) -> UInt8? {
+        guard let mapper = mapper else {
+            return nil
+        }
+
+        guard let mappedAddr = mapper.ppuMapRead(address: address) else {
+            return nil
+        }
+                
+        guard mappedAddr < chrMemory.count else {
+            return nil
+        }
+    
+        let data = chrMemory[Int(mappedAddr)]
+        
+        return data
     }
     
     func ppuWrite(address: UInt16, data: UInt8) -> Bool {
-        var mappedAddr: UInt32 = 0
-        if let mapper = mapper, mapper.ppuMapWrite(addr: address, mappedAddr: &mappedAddr) {
-            if mappedAddr < chrMemory.count {
-                chrMemory[Int(mappedAddr)] = data
-                return true
-            }
+        guard var mapper = mapper,
+              let mappedAddr = mapper.ppuMapWrite(address: address, value: data),
+              mappedAddr < chrMemory.count else {
+            return false
         }
-        return false
+        
+        // Should this be PRG instead of chr? 
+        chrMemory[Int(mappedAddr)] = data
+        return true
     }
     
     func getMirrorMode() -> Mirror {
-        return mirror
+        if let m = mapper as? MirrorControl {
+            switch m.mirrorMode {
+            case .horizontal: return .horizontal
+            case .vertical:   return .vertical
+            case .oneScreenLow:  return .oneScreenLo
+            case .oneScreenHigh: return .oneScreenHi
+            }
+        }
+        return mirror // fallback to header
+    }
+
+    func getMapperDebugInfo() -> [String: Any]? {
+        if let debugSupport = mapper as? DebugSupport {
+            return debugSupport.getDebugInfo()
+        }
+        return nil
+    }
+
+    func getMapperBankInfo() -> [String: UInt8]? {
+        if let debugSupport = mapper as? DebugSupport {
+            return debugSupport.getBankInfo()
+        }
+        return nil
+    }
+    
+    func handleScanline(scanline: UInt16) {
+        guard var scanlineMapper = mapper as? (Mapper & ScanlineAware) else { return }
+        scanlineMapper.handleScanline(scanline: scanline)
+        
+        // Update the stored mapper if it's a value type (struct)
+        if mapper is MMC3Mapper {
+            mapper = scanlineMapper
+        }
+    }
+    
+    func clearMapperIRQ() {
+        if var irqMapper = mapper as? IRQGeneration {
+            irqMapper.clearIRQ()
+            mapper = irqMapper as? any Mapper
+        }
     }
     
     func reset() {

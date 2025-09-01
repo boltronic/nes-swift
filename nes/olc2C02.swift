@@ -18,6 +18,8 @@ private extension Bool {
 class OLC2C02 {
     weak var bus: SystemBus?
     weak var cart: Cartridge?
+
+    private var previousA12State: Bool = false
     var nmi = false // when vblank occurs
     var frameCount: Int = 0
     
@@ -142,6 +144,17 @@ class OLC2C02 {
     private var pixelDebugCount                 = 0
     
     
+    // MARK: - PPU Event Receivers
+    private var eventReceivers: [PPUEventReceiver] = []
+    
+    func addEventReceiver(_ receiver: PPUEventReceiver) {
+        eventReceivers.append(receiver)
+    }
+    
+    func removeEventReceiver(_ receiver: PPUEventReceiver) {
+        eventReceivers.removeAll { $0 === receiver }
+    }
+    
     //MARK: - Sprite Rendering
     private var spriteScanline: [OAMEntry] = []  // Sprites on current scanline
     internal var spriteCount: Int = 0
@@ -226,16 +239,15 @@ class OLC2C02 {
                 // 8x8 sprites
                 let patternTable: UInt16 = control.contains(.spritePatternTable) ? 0x1000 : 0x0000
                 
-                // Handle vertical flip
-                var row = (scanline + 1) - UInt16(sprite.y)
+                // Handle vertical flip - FIXED: Remove the +1
+                var row = scanline - UInt16(sprite.y)
                 if sprite.flipV {
                     row = 7 &- row
                 }
                 
                 spritePatternAddrLo = patternTable | (UInt16(sprite.id) << 4) | row
             } else {
-                // 8x16 sprites 
-                var row = (scanline + 1) - UInt16(sprite.y)
+                var row = scanline - UInt16(sprite.y)
                             
                 // For 8x16 sprites, bit 0 of sprite ID selects pattern table
                 let patternTable: UInt16 = (sprite.id & 0x01) != 0 ? 0x1000 : 0x0000
@@ -246,19 +258,15 @@ class OLC2C02 {
                 var topTile: Bool
                 
                 if sprite.flipV {
-                    // When vertically flipped, we need to flip which tile we're in
-                    // and flip the row within that tile
                     row = 15 &- row
                     topTile = row < 8
-                    row = row & 7  // Get row within the 8x8 tile
+                    row = row & 7
                 } else {
                     topTile = row < 8
-                    row = row & 7  // Get row within the 8x8 tile
+                    row = row & 7
                 }
                 
-                // Select top or bottom tile
                 let actualTileId = topTile ? tileNumber : (tileNumber | 0x01)
-                
                 spritePatternAddrLo = patternTable | (UInt16(actualTileId) << 4) | row
             }
             
@@ -372,22 +380,31 @@ class OLC2C02 {
     
     // MARK: - Pattern Table Helpers
     private func fetchPatternTableLow() -> UInt8 {
-        // Fetch the low byte of the tile pattern
         let patternTable: UInt16 = control.contains(.backgroundPatternTable) ? 0x1000 : 0x0000
-        let addr = patternTable
-        + (UInt16(bg_next_tile_id) << 4)
-        + UInt16(vramAddrReg.fineY)
+        let addr = patternTable + (UInt16(bg_next_tile_id) << 4) + UInt16(vramAddrReg.fineY)
+        
+        // Check A12 based on the actual fetch address
+        let currentA12 = (addr & 0x1000) != 0
+        if !previousA12State && currentA12 {
+            print("A12 rising on pattern fetch: addr=\(String(format: "%04X", addr)), scanline \(scanline)")
+            cart?.handleScanline(scanline: scanline)
+        }
+        previousA12State = currentA12
         
         return ppuRead(addr)
     }
     
     private func fetchPatternTableHigh() -> UInt8 {
-        // Fetch the high byte of the tile pattern (8 bytes after low)
         let patternTable: UInt16 = control.contains(.backgroundPatternTable) ? 0x1000 : 0x0000
-        let addr = patternTable
-        + (UInt16(bg_next_tile_id) << 4)
-        + UInt16(vramAddrReg.fineY)
-        + 8
+        let addr = patternTable + (UInt16(bg_next_tile_id) << 4) + UInt16(vramAddrReg.fineY) + 8
+        
+        // Check A12 based on the actual fetch address
+        let currentA12 = (addr & 0x1000) != 0
+        if !previousA12State && currentA12 {
+            print("A12 rising on pattern fetch: addr=\(String(format: "%04X", addr)), scanline \(scanline)")
+            cart?.handleScanline(scanline: scanline)
+        }
+        previousA12State = currentA12
         
         return ppuRead(addr)
     }
@@ -705,6 +722,9 @@ class OLC2C02 {
     }
     
     func clock() {
+        // Track A12 line for Mapper IRQ timing
+        let currentA12 = (vramAddrReg.reg & 0x1000) != 0
+        
         // Background rendering happens on visible scanlines
         if scanline < 240 {  // Visible scanlines 0-239
             
@@ -717,19 +737,21 @@ class OLC2C02 {
                 switch (cycle - 1) % 8 {
                 case 0:
                     // Load the current background tile pattern and attributes into the "shifter"
-                    // The bottom 12 bits of the loopy register provide an index into
-                    // the 4 nametables, regardless of nametable mirroring configuration.
-                    // nametable_y(1) nametable_x(1) coarse_y(5) coarse_x(5)
                     loadBackgroundShifters()
                     bg_next_tile_id = fetchNametableByte()
+                    
                 case 2:
                     bg_next_tile_attrib = fetchAttributeByte()
+                    
                 case 4:
                     bg_next_tile_lsb = fetchPatternTableLow()
+                    
                 case 6:
                     bg_next_tile_msb = fetchPatternTableHigh()
+                    
                 case 7:
                     incrementScrollX()
+                    
                 default:
                     break
                 }
@@ -781,7 +803,6 @@ class OLC2C02 {
                 if spriteCount >= 8 {
                     status.insert(.spriteOverflow)
                 }
-
             }
             
             // Actually render the pixel
@@ -792,25 +813,29 @@ class OLC2C02 {
             // Fetch sprite patterns
             if cycle == 320 {
                 fetchSpritePatterns()
+                // Sprite pattern fetches can also trigger A12 transitions
+                checkA12Transition(currentA12: currentA12)
             }
             
             // Unused fetches at end of scanline (for MMC3 compatibility)
             if cycle == 337 || cycle == 339 {
                 bg_next_tile_id = fetchNametableByte()
+                checkA12Transition(currentA12: currentA12)
             }
         }
         
-        
-        // Vblank
-        if scanline == 241 && cycle == 1 {
-            status.insert(.verticalBlank)
-            if control.contains(.enableNMI) {
-                nmi = true
-            }
-        }
-        
-        // Pre-render scanline
+        // Pre-render scanline (261) - also does fetches that can trigger A12
         if scanline == 261 {
+            if (cycle >= 2 && cycle < 258) || (cycle >= 321 && cycle < 338) {
+                // Same fetching logic as visible scanlines
+                switch (cycle - 1) % 8 {
+                case 4, 6:
+                    checkA12Transition(currentA12: currentA12)
+                default:
+                    break
+                }
+            }
+            
             if cycle == 1 {
                 let hadVBlank = status.contains(.verticalBlank)
                 status.remove(.verticalBlank)
@@ -820,12 +845,29 @@ class OLC2C02 {
                     print("PPU: VBlank cleared at pre-render")
                 }
             }
+            
+            // Copy Y scroll settings at end of pre-render
+            if cycle >= 280 && cycle <= 304 {
+                transferAddressY()
+            }
         }
+        
+        // Vblank
+        if scanline == 241 && cycle == 1 {
+            status.insert(.verticalBlank)
+            if control.contains(.enableNMI) {
+                nmi = true
+            }
+        }
+        
         #if DEBUG_GRANULAR
         if scanline == 0 && cycle == 1 {
             print("Sprite 0 OAM: Y=\(oam[0]), Tile=\(oam[1]), Attr=\(oam[2]), X=\(oam[3])")
         }
         #endif
+        
+        // Store current A12 state for next cycle
+        previousA12State = currentA12
         
         // Advance cycle and scanline
         cycle += 1
@@ -845,23 +887,27 @@ class OLC2C02 {
         
     }
     
-    func cpuWrite(_ addr: UInt16, _ data: UInt8) {
+    func cpuWrite(_ addr: UInt16, _ data: UInt8) -> Bool {
         switch addr {
         case 0x0000: // Control
             control = PPUControl(rawValue: data)
             
             tempAddrReg.nametableX = control.contains(.nametableX)
             tempAddrReg.nametableY = control.contains(.nametableY)
+            return true
         case 0x0001: // Mask
             mask = PPUMask(rawValue: data)
+            return true
         case 0x0002: // Status
             // PPUSTATUS is read-only
-            break
+            return false
         case 0x0003: // OAM Address
             oamAddr = data
+            return true
         case 0x0004: // OAM Data
             oam[Int(oamAddr)] = data
             oamAddr &+= 1
+            return true
         case 0x0005: // Scroll
             if addressLatch == 0 {
                 // First write to scroll register contains X offset in pixel space
@@ -875,6 +921,7 @@ class OLC2C02 {
                 tempAddrReg.coarseY = data >> 3 // Top 5 bits
                 addressLatch = 0
             }
+            return true
         case 0x0006: // PPU Address
             if addressLatch == 0 {
                 // First write (high byte)
@@ -894,6 +941,7 @@ class OLC2C02 {
                 vramAddrReg = tempAddrReg  // Copy temp to real address
                 addressLatch = 0
             }
+            return true
         case 0x0007: // PPU Data
             ppuWrite(vramAddrReg.reg, data)
             // All writes from PPU data automatically increment the nametable
@@ -902,8 +950,9 @@ class OLC2C02 {
             // one whole nametable row; in horizontal mode it just increments
             // by 1, moving to the next column
             vramAddrReg.reg += control.contains(.incrementMode) ? 32 : 1
+            return true
         default:
-            break
+            return false
         }
     }
     
@@ -960,10 +1009,9 @@ class OLC2C02 {
         let address = addr & 0x3FFF
         
         // Try cartridge first - most reads come from CHR ROM
-        if let cart = cart, cart.ppuRead(address: address, data: &data) {
+        if let cart = cart, let data = cart.ppuRead(address: address) {
             return data
         }
-        
         // Pattern tables - fallback storage
         else if address >= 0x0000 && address <= 0x1FFF {
             // Test pattern table takes priority during debugging
@@ -1043,8 +1091,8 @@ class OLC2C02 {
         let address = addr & 0x3FFF
         
         // Try cartridge first
-        if cart?.ppuWrite(address: address, data: data) == true {
-            return
+        if let cart = cart {
+            cart.ppuWrite(address: address, data: data)
         }
         
         switch address {
@@ -1056,6 +1104,21 @@ class OLC2C02 {
             writePalette(address: address, data: data)
         default:
             break
+        }
+    }
+    
+    // MARK: - MMC3 IRQ Support
+    private func checkA12Transition(currentA12: Bool) {
+        if (mask.contains(.showBackground) || mask.contains(.showSprites)) {
+            // Debug: always print A12 state during a few cycles
+            if scanline == 100 && cycle >= 20 && cycle <= 30 {
+                print("A12 debug: cycle \(cycle), previousA12=\(previousA12State), currentA12=\(currentA12), vramAddr=\(String(format: "%04X", vramAddrReg.reg))")
+            }
+            
+            if !previousA12State && currentA12 {
+                print("A12 rising edge: scanline \(scanline), cycle \(cycle), vramAddr=\(String(format: "%04X", vramAddrReg.reg))")
+                cart?.handleScanline(scanline: scanline)
+            }
         }
     }
 }

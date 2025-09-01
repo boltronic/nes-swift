@@ -71,24 +71,24 @@ extension EmulatorTest {
     }
 }
 
-class TestCartridge: Cartridge {
-    var chrRam: [UInt8] = Array(repeating: 0, count: 0x2000)
-    
-    override func ppuWrite(address: UInt16, data: UInt8) -> Bool {
-        if address <= 0x1FFF {
-            chrRam[Int(address)] = data
-            return true
-        }
-        return false
-    }
-    
-    func ppuRead(address: UInt16) -> UInt8? {
-        if address <= 0x1FFF {
-            return chrRam[Int(address)]
-        }
-        return nil
-    }
-}
+//class TestCartridge: Cartridge {
+//    var chrRam: [UInt8] = Array(repeating: 0, count: 0x2000)
+//    
+//    override func ppuWrite(address: UInt16, data: UInt8) -> Bool {
+//        if address <= 0x1FFF {
+//            chrRam[Int(address)] = data
+//            return true
+//        }
+//        return false
+//    }
+//    
+//    func ppuRead(address: UInt16) -> UInt8? {
+//        if address <= 0x1FFF {
+//            return chrRam[Int(address)]
+//        }
+//        return nil
+//    }
+//}
 
 class EmulatorTest {
     let bus = SystemBus()

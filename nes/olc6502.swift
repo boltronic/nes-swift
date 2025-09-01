@@ -13,7 +13,6 @@ protocol Bus: AnyObject {
     func read(address: UInt16) -> UInt8
     // Writes a byte to the specified address
     func write(address: UInt16, data: UInt8)
-
 }
 
 class OLC6502 {
@@ -33,10 +32,6 @@ class OLC6502 {
     private var clock_count: UInt32 = 0
     
     private weak var bus: Bus?
-    
-    #if LOGMODE
-    private var logfile: FileHandle?
-    #endif
     
     enum FLAGS6502: UInt8 {
         case C = 0b00000001 // Carry
@@ -77,7 +72,7 @@ class OLC6502 {
         let cycles: UInt8
     }
     
-    private var lookup: [Instruction] = []
+    internal var lookup: [Instruction] = []
     
     init() {
         setupInstructionTable()
@@ -196,17 +191,12 @@ class OLC6502 {
             // how to implement the instruction
             opcode = read(pc)
             
-            #if LOGMODE
-            let log_pc = pc
-            #endif
-            
             // Always set the unused status flag bit to 1
             setFlag(.U, true)
 
             // Increment program counter, we read the opcode byte
             pc += 1
-            
-            
+                        
             let instruction = lookup[Int(opcode)]
             cycles = instruction.cycles
             
@@ -221,12 +211,7 @@ class OLC6502 {
 
             // Always set the unused status flag bit to 1
             setFlag(.U, true)
-            
-            #if LOGMODE
-            // Logging implementation would go here
-            #endif
         }
-        
         clock_count += 1
         cycles -= 1
     }
@@ -620,12 +605,12 @@ class OLC6502 {
         pc += 1
         setFlag(.I, true)
         write(0x0100 + UInt16(stkp), UInt8((pc >> 8) & 0x00FF))
-        stkp -= 1
+        stkp = stkp &- 1
         write(0x0100 + UInt16(stkp), UInt8(pc & 0x00FF))
-        stkp -= 1
+        stkp = stkp &- 1
         setFlag(.B, true)
         write(0x0100 + UInt16(stkp), status)
-        stkp -= 1
+        stkp = stkp &- 1
         setFlag(.B, false)
         pc = UInt16(read(0xFFFE)) | (UInt16(read(0xFFFF)) << 8)
         return 0
@@ -928,11 +913,11 @@ class OLC6502 {
 
     // Return from Subroutine
     private func RTS() -> UInt8 {
-        stkp += 1
+        stkp = stkp &+ 1
         pc = UInt16(read(0x0100 + UInt16(stkp)))
-        stkp += 1
+        stkp = stkp &+ 1
         pc |= UInt16(read(0x0100 + UInt16(stkp))) << 8
-        pc += 1
+        pc = pc &+ 1
         return 0
     }
 
@@ -1037,7 +1022,7 @@ class OLC6502 {
     }
 
     
-    private func setupInstructionTable() {
+    func setupInstructionTable() {
         lookup = [
             // MARK: - Translation Table
             Instruction(name: "BRK", operate: BRK, addressingMode: .IMM, cycles: 7),

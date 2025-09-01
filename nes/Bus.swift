@@ -42,10 +42,10 @@ class SystemBus: Bus {
         cpuWrite(address: address, data: data)
     }
     
-    func cpuWrite(address: UInt16, data: UInt8) {
+    func cpuWrite(address: UInt16, data: UInt8) -> Bool {
         // Try cartridge first
         if let cart = cart, cart.cpuWrite(address: address, data: data) {
-            return  // Cartridge handled it
+            return true
         }
         
         if address == 0x4014 {
@@ -62,7 +62,7 @@ class SystemBus: Bus {
             }
             // DMA takes 513 or 514 CPU cycles
             // For now, we'll just do it instantly
-            return
+            return true
         }
         else if address == 0x4016 {
             // Controller strobe
@@ -71,31 +71,29 @@ class SystemBus: Bus {
             #endif
             controller1.write(data)
             controller2.write(data)
+            return true
         }
         // No cartridge or cartridge didn't handle it
         else if address >= 0x0000 && address <= 0x1FFF {
             cpuRam[Int(address & 0x07FF)] = data
+            return true
         }
         else if address >= 0x2000 && address <= 0x3FFF {
             let ppuAddr = address & 0x0007
-            
-            // DEBUG: Log PPU writes
-//            print("CPU writing $\(String(format: "%04X", address)) (PPU $\(String(format: "%04X", ppuAddr))): \(String(format: "%02X", data))")
-            
-            ppu.cpuWrite(ppuAddr, data)
+
+            return ppu.cpuWrite(ppuAddr, data)
         }
         else if address >= 0x8000 && address <= 0xFFFF {
-            // ROM area - typically read-only, but some mappers allow writes
-            // Log this as it might indicate an issue
-            print("Warning: Attempted write to ROM area $\(String(format: "%04X", address)): \(String(format: "%02X", data))")
+            return false
         }
+        return false
     }
     
     func cpuRead(address: UInt16, readOnly: Bool = false) -> UInt8 {
         var data: UInt8 = 0x00
         
         // Try cartridge first
-        if let cart = cart, cart.cpuRead(address: address, data: &data) {
+        if let cart = cart, let data = cart.cpuRead(address: address) {
             return data  // Cartridge provided data
         }
         
@@ -167,11 +165,17 @@ class SystemBus: Bus {
             cpu.nmi()
         }
         
+        if let cart = cart {
+            if let irqMapper = cart.mapper as? IRQGeneration, irqMapper.irqActive {
+                cpu.irq()  // Make sure your CPU has an irq() method
+                cart.clearMapperIRQ()
+            }
+        }
+        
         // Clock CPU every 3rd PPU cycle
         if systemClockCounter % 3 == 0 {
             cpu.clock()
         }
-        
         systemClockCounter += 1
     }
 }
